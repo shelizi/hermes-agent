@@ -481,6 +481,52 @@ describe('usePromptActions submit / queue drain semantics', () => {
     )
   })
 
+  it('submits the first prompt after createBackendSessionForSend binds a new session', async () => {
+    const activeSessionIdRef: MutableRefObject<string | null> = { current: null }
+    const selectedStoredSessionIdRef: MutableRefObject<string | null> = { current: null }
+    let routeToken = 'new-chat'
+
+    const createBackendSessionForSend = vi.fn(async () => {
+      // Mirror the real session.create action: it binds both ids and navigates
+      // before returning to submitText. The submit context guard must accept
+      // this transition, or the first prompt is silently aborted.
+      activeSessionIdRef.current = 'rt-fresh'
+      selectedStoredSessionIdRef.current = 'stored-fresh'
+      routeToken = 'session:stored-fresh'
+
+      return 'rt-fresh'
+    })
+
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    let handle: HarnessHandle | null = null
+    render(
+      <Harness
+        activeSessionId={null}
+        activeSessionIdRef={activeSessionIdRef}
+        createBackendSessionForSend={createBackendSessionForSend}
+        getRouteToken={() => routeToken}
+        onReady={h => (handle = h)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+        selectedStoredSessionIdRef={selectedStoredSessionIdRef}
+        storedSessionId={null}
+      />
+    )
+
+    await handle!.submitText('first message')
+
+    expect(createBackendSessionForSend).toHaveBeenCalledWith('first message')
+    expect(requestGateway).toHaveBeenCalledWith(
+      'prompt.submit',
+      {
+        session_id: 'rt-fresh',
+        text: 'first message'
+      },
+      1_800_000
+    )
+  })
+
   it('a fromQueue drain sends even when busyRef is still true on the settle edge', async () => {
     // busyRef lags $busy by one effect tick on the busy→false settle edge, so a
     // drained queue send would otherwise hit the busy guard and silently no-op.
@@ -1390,6 +1436,7 @@ describe('usePromptActions submit session-context isolation (#54527)', () => {
   it('aborts recovery submit when the user switches sessions during timeout resume', async () => {
     const calls: { method: string; params?: Record<string, unknown> }[] = []
     let submitAttempts = 0
+
     let releaseResume: () => void = () => {}
 
     const selectedStoredSessionIdRef: MutableRefObject<string | null> = { current: STORED_SESSION_A }

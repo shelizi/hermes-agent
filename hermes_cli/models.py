@@ -2386,9 +2386,17 @@ def fetch_devin_cli_models(
     import subprocess
 
     cmd = (command or "").strip()
+    # Preserve the historical behavior for explicit commands and PATH-based
+    # shims. The shared resolver adds the official Windows Devin install
+    # fallback when normal PATH lookup fails.
+    resolved = shutil.which(cmd) if cmd else None
+    if not resolved and cmd and (os.sep in cmd or "/" in cmd):
+        resolved = cmd
     if not cmd:
         try:
-            from hermes_cli.auth import _resolve_external_process_command_args
+            from hermes_cli.auth import (
+                _resolve_external_process_command_args,
+            )
 
             cmd, _args = _resolve_external_process_command_args("devin-acp")
         except Exception:
@@ -2397,10 +2405,17 @@ def fetch_devin_cli_models(
                 or os.getenv("DEVIN_CLI_PATH", "").strip()
                 or "devin"
             )
-    # Resolve bare command names via PATH so Windows/msys work consistently.
-    resolved = shutil.which(cmd) if cmd and os.sep not in cmd and "/" not in cmd else cmd
+    if not resolved and cmd:
+        try:
+            from hermes_cli.auth import _resolve_external_process_command_path
+
+            resolved = _resolve_external_process_command_path("devin-acp", cmd)
+        except Exception:
+            pass
+    # Keep an explicit path as-is; the shared resolver handles PATH and the
+    # official per-user Devin install location.
     if not resolved:
-        resolved = cmd
+        resolved = cmd if cmd else None
     if not resolved:
         return []
 

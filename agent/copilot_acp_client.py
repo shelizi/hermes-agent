@@ -44,6 +44,15 @@ ACP_MARKER_BASE_URL = "acp://copilot"
 _DEFAULT_TIMEOUT_SECONDS = 900.0
 _REUSE_DISABLE_VALUES = frozenset({"0", "false", "no", "off"})
 
+# A few ACP implementations write the JSON-RPC response before the final
+# session/update notification has made it through their event loop.  The
+# normal post-response quiet window is intentionally short, but an empty
+# response needs a little more time for the first delayed agent chunk.  This
+# is a transport-level compatibility grace period, not a model/API timeout.
+_ACP_POST_RESPONSE_IDLE_SECONDS = 0.15
+_ACP_POST_RESPONSE_STABLE_CHECKS = 2
+_ACP_FIRST_CHUNK_GRACE_SECONDS = 2.0
+
 
 def _acp_process_reuse_enabled() -> bool:
     raw = os.getenv("HERMES_ACP_PROCESS_REUSE", "1").strip().lower()
@@ -1304,23 +1313,52 @@ class CopilotACPClient:
         if proc is None or inbox is None:
             return
 
-        deadline = time.monotonic() + timeout_seconds
-        idle_seconds = 0.15
-        stable_checks = 2
+        # If the prompt response won the race with the first notification,
+        # waiting for only the normal quiet window can return an empty answer
+        # while the real answer is still in flight.  In that case wait for the
+        # first chunk for a bounded grace period, then switch to the short
+        # quiet window once output has started.  This prevents a late
+        # first-turn chunk from being consumed by the next prompt.
+        content_seen = bool(text_parts or reasoning_parts)
+        idle_seconds = _ACP_POST_RESPONSE_IDLE_SECONDS
+        quiet_window = idle_seconds * _ACP_POST_RESPONSE_STABLE_CHECKS
+        overall_deadline = time.monotonic() + timeout_seconds
+        first_chunk_deadline = (
+            min(overall_deadline, time.monotonic() + _ACP_FIRST_CHUNK_GRACE_SECONDS)
+            if not content_seen
+            else None
+        )
+        quiet_deadline = min(overall_deadline, time.monotonic() + quiet_window)
         stable_count = 0
-        while time.monotonic() < deadline:
-            remaining = min(idle_seconds, deadline - time.monotonic())
+        while True:
+            now = time.monotonic()
+            if not content_seen:
+                if first_chunk_deadline is None or now >= first_chunk_deadline:
+                    break
+                deadline = first_chunk_deadline
+            else:
+                if now >= quiet_deadline:
+                    break
+                deadline = quiet_deadline
+
+            remaining = min(idle_seconds, deadline - now)
             if remaining <= 0:
                 break
             try:
                 msg = inbox.get(timeout=remaining)
             except queue.Empty:
+                if not content_seen:
+                    # No output yet: the ACP server may have acknowledged the
+                    # prompt before publishing its first agent chunk.  Keep
+                    # listening until the first-chunk grace period expires.
+                    continue
                 stable_count += 1
-                if stable_count >= stable_checks:
+                if stable_count >= _ACP_POST_RESPONSE_STABLE_CHECKS:
                     break
                 continue
 
             stable_count = 0
+            before_content = len(text_parts) + len(reasoning_parts)
             if self._handle_server_message(
                 msg,
                 process=proc,
@@ -1330,6 +1368,10 @@ class CopilotACPClient:
                 on_text_chunk=on_text_chunk,
                 on_reasoning_chunk=on_reasoning_chunk,
             ):
+                after_content = len(text_parts) + len(reasoning_parts)
+                if after_content > before_content:
+                    content_seen = True
+                    quiet_deadline = min(overall_deadline, time.monotonic() + quiet_window)
                 continue
 
             # Not a notification we can drain; put it back for the next RPC.
