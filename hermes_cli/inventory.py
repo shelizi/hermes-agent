@@ -314,7 +314,7 @@ def _append_unconfigured_rows(
     the saved model so GUI pickers don't silently snap to some other provider.
     """
     from hermes_cli.auth import PROVIDER_REGISTRY
-    from hermes_cli.models import CANONICAL_PROVIDERS, _PROVIDER_LABELS
+    from hermes_cli.models import CANONICAL_PROVIDERS, _PROVIDER_LABELS, _PROVIDER_MODELS
 
     seen = {r["slug"].lower() for r in rows}
     cur = (ctx.current_provider or "").lower()
@@ -356,14 +356,20 @@ def _append_unconfigured_rows(
                 }
             )
             continue
+        cfg = PROVIDER_REGISTRY.get(entry.slug)
+        models = (
+            list(_PROVIDER_MODELS.get(entry.slug, []))
+            if cfg and cfg.auth_type == "external_process"
+            else []
+        )
         extras.append(
             {
                 "slug": entry.slug,
                 "name": _PROVIDER_LABELS.get(entry.slug, entry.label),
                 "is_current": entry.slug.lower() == cur,
                 "is_user_defined": False,
-                "models": [],
-                "total_models": 0,
+                "models": models,
+                "total_models": len(models),
                 "source": "canonical",
             }
         )
@@ -464,10 +470,11 @@ def _apply_picker_hints(rows: list[dict]) -> None:
             continue
         # Distinguish authenticated rows (returned by
         # list_authenticated_providers) from skeleton rows (from
-        # _append_unconfigured_rows). The skeleton rows have empty
-        # `models` AND source="canonical"; authenticated rows have
-        # populated `models` OR a non-canonical source.
-        is_skeleton = row.get("source") == "canonical" and not row.get("models")
+        # _append_unconfigured_rows). External-process skeletons carry their
+        # static fallback model list so users can inspect available choices
+        # before logging in; source="canonical" remains the authoritative
+        # unauthenticated marker.
+        is_skeleton = row.get("source") == "canonical"
         row["authenticated"] = not is_skeleton
         if not is_skeleton or row.get("is_user_defined"):
             continue

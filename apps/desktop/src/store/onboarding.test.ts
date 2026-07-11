@@ -5,11 +5,18 @@ import type { OAuthProvider } from '@/types/hermes'
 
 import {
   $desktopOnboarding,
+  clearPendingProviderOAuth,
+  closeManualOnboarding,
+  completeDesktopOnboarding,
   type DesktopOnboardingState,
+  dismissFirstRunOnboarding,
   type OnboardingContext,
+  peekPendingProviderOAuth,
   refreshOnboarding,
   requestDesktopOnboarding,
   saveOnboardingLocalEndpoint,
+  startManualLocalEndpoint,
+  startManualProviderOAuth,
   submitOnboardingCode
 } from './onboarding'
 
@@ -35,6 +42,7 @@ function baseState(overrides: Partial<DesktopOnboardingState> = {}): DesktopOnbo
     firstRunSkipped: false,
     manual: false,
     localEndpoint: false,
+    pendingProviderOAuthId: null,
     ...overrides
   }
 }
@@ -284,7 +292,7 @@ describe('OAuth onboarding', () => {
         return { ok: true, status: 'approved' }
       }
 
-      if (path === '/api/model/options') {
+      if (path.startsWith('/api/model/options')) {
         return {
           providers: [
             {
@@ -357,7 +365,7 @@ describe('OAuth onboarding', () => {
 
     expect(calls.some(c => c.path === '/api/model/set')).toBe(true)
 
-    const optionsIndex = calls.findIndex(c => c.path === '/api/model/options')
+    const optionsIndex = calls.findIndex(c => c.path.startsWith('/api/model/options'))
     const recommendedIndex = calls.findIndex(c => c.path.startsWith('/api/model/recommended-default'))
     const setIndex = calls.findIndex(c => c.path === '/api/model/set')
 
@@ -538,5 +546,65 @@ describe('saveOnboardingLocalEndpoint', () => {
     expect(result.ok).toBe(false)
     expect(result.message).toContain('No provider can serve the selected model.')
     expect($desktopOnboarding.get().configured).not.toBe(true)
+  })
+})
+
+describe('pendingProviderOAuthId lifecycle', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    $desktopOnboarding.set(baseState())
+    installApiMock(vi.fn(async () => ({ providers: [] })))
+  })
+
+  afterEach(() => {
+    window.localStorage.clear()
+    $desktopOnboarding.set(baseState())
+    vi.restoreAllMocks()
+    delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
+  })
+
+  it('is set by startManualProviderOAuth and read by peekPendingProviderOAuth', () => {
+    startManualProviderOAuth('nous')
+    expect(peekPendingProviderOAuth()).toBe('nous')
+    expect($desktopOnboarding.get().pendingProviderOAuthId).toBe('nous')
+  })
+
+  it('is cleared by clearPendingProviderOAuth', () => {
+    startManualProviderOAuth('nous')
+    clearPendingProviderOAuth()
+    expect(peekPendingProviderOAuth()).toBeNull()
+    expect($desktopOnboarding.get().pendingProviderOAuthId).toBeNull()
+  })
+
+  it('is cleared when the manual onboarding overlay is closed', () => {
+    startManualProviderOAuth('nous')
+    closeManualOnboarding()
+    expect(peekPendingProviderOAuth()).toBeNull()
+    expect($desktopOnboarding.get().pendingProviderOAuthId).toBeNull()
+    expect($desktopOnboarding.get().flow.status).toBe('idle')
+    expect($desktopOnboarding.get().manual).toBe(false)
+  })
+
+  it('is cleared when switching to the local endpoint form', () => {
+    startManualProviderOAuth('nous')
+    startManualLocalEndpoint()
+    expect(peekPendingProviderOAuth()).toBeNull()
+    expect($desktopOnboarding.get().localEndpoint).toBe(true)
+    expect($desktopOnboarding.get().mode).toBe('apikey')
+  })
+
+  it('is cleared when the first-run onboarding is dismissed', () => {
+    startManualProviderOAuth('nous')
+    dismissFirstRunOnboarding()
+    expect(peekPendingProviderOAuth()).toBeNull()
+    expect($desktopOnboarding.get().firstRunSkipped).toBe(true)
+  })
+
+  it('is cleared when desktop onboarding completes', () => {
+    startManualProviderOAuth('nous')
+    completeDesktopOnboarding()
+    expect(peekPendingProviderOAuth()).toBeNull()
+    expect($desktopOnboarding.get().configured).toBe(true)
+    expect($desktopOnboarding.get().pendingProviderOAuthId).toBeNull()
   })
 })
