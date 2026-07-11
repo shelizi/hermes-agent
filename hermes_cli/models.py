@@ -273,9 +273,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     "copilot-acp": [
         "copilot-acp",
     ],
-    "devin-acp": [
-        "devin-acp",
-    ],
     "copilot": [
         "gpt-5.4",
         "gpt-5.4-mini",
@@ -1130,6 +1127,7 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("ollama-cloud",   "Ollama Cloud",             "Ollama Cloud (Cloud-hosted open models, ollama.com)"),
     ProviderEntry("arcee",          "Arcee AI",                 "Arcee AI (Trinity models, direct API)"),
     ProviderEntry("gmi",            "GMI Cloud",                "GMI Cloud (Multi-model direct API)"),
+    ProviderEntry("fireworks",      "Fireworks AI",             "Fireworks AI (OpenAI-compatible direct model API)"),
     ProviderEntry("kilocode",       "Kilo Code",                "Kilo Code (Kilo Gateway API)"),
     ProviderEntry("opencode-zen",   "OpenCode Zen",             "OpenCode Zen (Curated models, pay-as-you-go)"),
     ProviderEntry("opencode-go",    "OpenCode Go",              "OpenCode Go (Open models subscription)"),
@@ -1296,6 +1294,8 @@ _PROVIDER_ALIASES = {
     "arceeai": "arcee",
     "gmi-cloud": "gmi",
     "gmicloud": "gmi",
+    "fireworks-ai": "fireworks",
+    "fw": "fireworks",
     "minimax-china": "minimax-cn",
     "minimax_cn": "minimax-cn",
     "minimax-portal": "minimax-oauth",
@@ -2389,17 +2389,9 @@ def fetch_devin_cli_models(
     import subprocess
 
     cmd = (command or "").strip()
-    # Preserve the historical behavior for explicit commands and PATH-based
-    # shims. The shared resolver adds the official Windows Devin install
-    # fallback when normal PATH lookup fails.
-    resolved = shutil.which(cmd) if cmd else None
-    if not resolved and cmd and (os.sep in cmd or "/" in cmd):
-        resolved = cmd
     if not cmd:
         try:
-            from hermes_cli.auth import (
-                _resolve_external_process_command_args,
-            )
+            from hermes_cli.auth import _resolve_external_process_command_args
 
             cmd, _args = _resolve_external_process_command_args("devin-acp")
         except Exception:
@@ -2408,17 +2400,10 @@ def fetch_devin_cli_models(
                 or os.getenv("DEVIN_CLI_PATH", "").strip()
                 or "devin"
             )
-    if not resolved and cmd:
-        try:
-            from hermes_cli.auth import _resolve_external_process_command_path
-
-            resolved = _resolve_external_process_command_path("devin-acp", cmd)
-        except Exception:
-            pass
-    # Keep an explicit path as-is; the shared resolver handles PATH and the
-    # official per-user Devin install location.
+    # Resolve bare command names via PATH so Windows/msys work consistently.
+    resolved = shutil.which(cmd) if cmd and os.sep not in cmd and "/" not in cmd else cmd
     if not resolved:
-        resolved = cmd if cmd else None
+        resolved = cmd
     if not resolved:
         return []
 
@@ -2658,7 +2643,15 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
                     # live API is the authoritative catalog, so they merge
                     # live-first — live entries lead and stale curated entries
                     # no longer pollute the top of the picker. (#49129)
-                    curated = list(_PROVIDER_MODELS.get(normalized, []))
+                    #
+                    # Plugin providers with no static _PROVIDER_MODELS entry fall
+                    # back to the profile's curated fallback_models so their
+                    # agentic picks lead the picker instead of whatever the live
+                    # catalog happens to return first (e.g. Fireworks lists an
+                    # image model, flux-*, ahead of its chat models).
+                    curated = list(_PROVIDER_MODELS.get(normalized, [])) or list(
+                        _p.fallback_models or ()
+                    )
                     if curated:
                         if normalized in _LIVE_FIRST_PICKER_PROVIDERS:
                             primary, secondary = live, curated
