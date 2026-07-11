@@ -1,6 +1,6 @@
 import { useStore } from '@nanostores/react'
 import type { ReactNode } from 'react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { runInTerminal } from '@/app/right-sidebar/store'
 import {
@@ -300,6 +300,8 @@ export function ProvidersSettings({ onClose, onViewChange, view }: ProvidersSett
   const { t } = useI18n()
   const { rowProps, vars } = useEnvCredentials()
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([])
+  const [oauthLoaded, setOauthLoaded] = useState(false)
+  const oauthLoadedRef = useRef(false)
   const [openProvider, setOpenProvider] = useState<null | string>(null)
   const [disconnecting, setDisconnecting] = useState<null | string>(null)
   // Free-text filter for the API-keys view (provider name / env-var key / desc).
@@ -310,32 +312,22 @@ export function ProvidersSettings({ onClose, onViewChange, view }: ProvidersSett
   const onboardingActive = useStore($desktopOnboarding).manual
 
   const refreshOAuthProviders = useCallback(async () => {
-    // OAuth providers are best-effort — a failure here just hides the panel.
-    const { providers } = await listOAuthProviders()
-    setOauthProviders(providers)
+    try {
+      const { providers } = await listOAuthProviders()
+      setOauthProviders(providers)
+    } finally {
+      oauthLoadedRef.current = true
+      setOauthLoaded(true)
+    }
   }, [])
 
   useEffect(() => {
-    let cancelled = false
+    if (onboardingActive && oauthLoadedRef.current) {
+      return
+    }
 
-    void (async () => {
-      if (onboardingActive) {
-        return
-      }
-
-      try {
-        const { providers } = await listOAuthProviders()
-
-        if (!cancelled) {
-          setOauthProviders(providers)
-        }
-      } catch {
-        // Ignore — the OAuth panel just won't render.
-      }
-    })()
-
-    return () => void (cancelled = true)
-  }, [onboardingActive])
+    void refreshOAuthProviders().catch(() => undefined)
+  }, [onboardingActive, refreshOAuthProviders])
 
   // External (CLI-managed) providers can't be cleared via the API by design —
   // Hermes never deletes creds another tool owns behind a silent API call.
@@ -396,9 +388,13 @@ export function ProvidersSettings({ onClose, onViewChange, view }: ProvidersSett
   const hasOauth = oauthProviders.length > 0
   // The sidebar subnav owns the Accounts/API-keys split now; with no OAuth
   // providers there's nothing for the "Accounts" view to show, so fall to keys.
-  const showApiKeys = view === 'keys' || !hasOauth
+  const showApiKeys = view === 'keys' || (oauthLoaded && !hasOauth)
 
   const keyGroups = buildProviderKeyGroups(vars)
+
+  if (view === 'accounts' && !oauthLoaded) {
+    return <LoadingState label={t.settings.providers.loading} />
+  }
 
   if (showApiKeys) {
     const q = normalize(keyQuery)

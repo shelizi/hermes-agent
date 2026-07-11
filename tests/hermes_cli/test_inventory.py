@@ -337,9 +337,7 @@ def test_pricing_can_force_fresh_nous_tier():
 
 
 def test_include_unconfigured_appends_canonical_skeletons():
-    """include_unconfigured=True adds CANONICAL_PROVIDERS rows that
-    list_authenticated_providers didn't emit. Skeleton rows have empty
-    models and source='canonical'."""
+    """include_unconfigured=True appends missing canonical providers."""
     rows = [
         {"slug": "openrouter", "name": "OpenRouter", "models": ["m1"],
          "total_models": 1, "is_current": True, "is_user_defined": False,
@@ -348,18 +346,16 @@ def test_include_unconfigured_appends_canonical_skeletons():
     ctx = _empty_ctx(provider="openrouter")
     with _list_auth_returning(rows):
         payload = build_models_payload(ctx, include_unconfigured=True)
-    # All canonical providers other than openrouter should appear as
-    # skeleton rows.
     from hermes_cli.models import CANONICAL_PROVIDERS
 
     seen_slugs = {r["slug"] for r in payload["providers"]}
     for entry in CANONICAL_PROVIDERS:
         assert entry.slug in seen_slugs, f"missing {entry.slug}"
-    # Skeletons have empty models and source='canonical'.
-    skeletons = [r for r in payload["providers"]
-                 if r.get("source") == "canonical"]
-    assert all(r["models"] == [] for r in skeletons)
-    assert all(r["total_models"] == 0 for r in skeletons)
+    devin = next(r for r in payload["providers"] if r["slug"] == "devin-acp")
+    assert devin["source"] == "canonical"
+    assert "adaptive" in devin["models"]
+    assert "swe-1.7" in devin["models"]
+    assert devin["total_models"] == len(devin["models"])
 
 
 def test_include_unconfigured_skips_already_present_slugs():
@@ -503,6 +499,17 @@ def test_explicit_only_keeps_moa_when_raw_config_has_enabled_preset():
     assert payload["providers"][0]["models"] == ["review"]
     assert payload["providers"][1]["source"] == "configured-current"
     assert payload["providers"][1]["authenticated"] is False
+
+
+def test_unconfigured_devin_models_remain_unauthenticated():
+    with _list_auth_returning([]):
+        payload = build_models_payload(
+            _empty_ctx(), include_unconfigured=True, picker_hints=True,
+        )
+    devin = next(r for r in payload["providers"] if r["slug"] == "devin-acp")
+    assert devin["authenticated"] is False
+    assert devin["auth_type"] == "external_process"
+    assert "adaptive" in devin["models"]
 # ─── picker_hints ──────────────────────────────────────────────────────
 
 
