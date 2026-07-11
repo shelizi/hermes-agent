@@ -29,6 +29,23 @@ import {
   withSessionBusyRetry
 } from './utils'
 
+function logFreshSubmitDiagnostic(phase: string, details: Record<string, unknown> = {}) {
+  // Electron forwards renderer console.error entries to desktop.log. Keep this
+  // deliberately scoped to fresh-session submits and never include prompt text
+  // so it is useful for diagnosing the first-message race without logging user
+  // content. The bridge check keeps unit-test output quiet and limits this to
+  // the Desktop surface where the bug occurs.
+  if (typeof window === 'undefined' || !window.hermesDesktop) {
+    return
+  }
+
+  try {
+    console.error(`[hermes-submit-diagnostic] ${phase} ${JSON.stringify(details)}`)
+  } catch {
+    // Diagnostics must never affect the submit path.
+  }
+}
+
 interface SubmitPromptDeps {
   activeSessionId: string | null
   activeSessionIdRef: MutableRefObject<string | null>
@@ -121,10 +138,40 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
       const startingActiveSessionId = activeSessionIdRef.current
       const startingStoredSessionId = selectedStoredSessionIdRef.current
       const startingRouteToken = getRouteToken()
+      const isFreshSessionSubmit = !startingActiveSessionId && !startingStoredSessionId
+
+      const diagnostic = (phase: string, details: Record<string, unknown> = {}) => {
+        if (isFreshSessionSubmit) {
+          logFreshSubmitDiagnostic(phase, details)
+        }
+      }
+
+      diagnostic('submit-start', {
+        activeSessionId: startingActiveSessionId,
+        routeToken: startingRouteToken,
+        storedSessionId: startingStoredSessionId
+      })
+
+      // Creating/resuming a runtime session is part of this submit pipeline.
+      // Those operations intentionally update all three values below (the
+      // runtime id, the stored id, and, for a new chat, the route). Keep the
+      // context guard pinned to the *latest accepted binding* instead of the
+      // pre-create draft values, otherwise the expected new-session transition
+      // looks like a user switch and the first prompt is silently aborted.
+      let expectedActiveSessionId = startingActiveSessionId
+      let expectedStoredSessionId = startingStoredSessionId
+      let expectedRouteToken = startingRouteToken
 
       const sessionContextDrifted = (): boolean =>
-        selectedStoredSessionIdRef.current !== startingStoredSessionId ||
-        getRouteToken() !== startingRouteToken
+        activeSessionIdRef.current !== expectedActiveSessionId ||
+        selectedStoredSessionIdRef.current !== expectedStoredSessionId ||
+        getRouteToken() !== expectedRouteToken
+
+      const adoptSessionBinding = (runtimeSessionId: string) => {
+        expectedActiveSessionId = runtimeSessionId
+        expectedStoredSessionId = selectedStoredSessionIdRef.current
+        expectedRouteToken = getRouteToken()
+      }
 
       // One submit in flight per session — drop any concurrent re-fire so a
       // stalled turn can't stack the same prompt into multiple real turns.
@@ -179,7 +226,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
             // (what made drained-after-interrupt sends go silent).
             interrupted: false
           }),
-          startingStoredSessionId
+          expectedStoredSessionId
         )
 
       // After sync rewrites refs, refresh the optimistic message in place so the
@@ -191,7 +238,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
             ...state,
             messages: state.messages.map(message => (message.id === optimisticId ? buildUserMessage() : message))
           }),
-          startingStoredSessionId
+          expectedStoredSessionId
         )
 
       const dropOptimistic = (sid: null | string) => {
@@ -210,11 +257,20 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
             awaitingResponse: false,
             pendingBranchGroup: null
           }),
-          startingStoredSessionId
+          expectedStoredSessionId
         )
       }
 
       const abortForSessionSwitch = (optimisticSessionId: null | string): false => {
+        diagnostic('abort-session-context', {
+          currentActiveSessionId: activeSessionIdRef.current,
+          currentRouteToken: getRouteToken(),
+          currentStoredSessionId: selectedStoredSessionIdRef.current,
+          expectedActiveSessionId,
+          expectedRouteToken,
+          expectedStoredSessionId,
+          optimisticSessionId
+        })
         dropOptimistic(optimisticSessionId)
         releaseBusy()
 
@@ -254,6 +310,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           if (resumed?.session_id) {
             sessionId = resumed.session_id
             activeSessionIdRef.current = sessionId
+            adoptSessionBinding(sessionId)
           }
         } catch {
           // Resume failed (session gone from state.db, gateway hiccup) —
@@ -271,18 +328,19 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
       }
 
       if (!sessionId) {
+        diagnostic('session-create-start')
+
         try {
           sessionId = await createBackendSessionForSend(visibleText)
         } catch (err) {
+          diagnostic('session-create-error', {
+            errorType: err instanceof Error ? err.name : typeof err
+          })
           dropOptimistic(null)
           releaseBusy()
           notifyError(err, copy.sessionUnavailable)
 
           return false
-        }
-
-        if (sessionContextDrifted()) {
-          return abortForSessionSwitch(sessionId)
         }
 
         if (!sessionId) {
@@ -293,6 +351,27 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           return false
         }
 
+        diagnostic('session-create-result', {
+          currentActiveSessionId: activeSessionIdRef.current,
+          currentRouteToken: getRouteToken(),
+          currentStoredSessionId: selectedStoredSessionIdRef.current,
+          runtimeSessionId: sessionId
+        })
+
+        // A successful create deliberately changes the selected stored id and
+        // navigates from /new to /:stored-id. Rebase the guard before the
+        // attachment sync and prompt RPC so that transition is not treated as
+        // an external session switch.
+        if (activeSessionIdRef.current && activeSessionIdRef.current !== sessionId) {
+          return abortForSessionSwitch(sessionId)
+        }
+
+        // The real create action binds this ref before returning. Keeping the
+        // assignment here also makes the submit contract explicit and avoids a
+        // stale render/ref pair from dropping the prompt between create and
+        // submit.
+        activeSessionIdRef.current = sessionId
+        adoptSessionBinding(sessionId)
         seedOptimistic(sessionId)
       }
 
@@ -311,6 +390,13 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         attachmentRefs = syncedAttachments.map(optimisticAttachmentRef).filter((r): r is string => Boolean(r))
         rewriteOptimistic(sessionId)
         const text = buildContextText(syncedAttachments)
+
+        diagnostic('prompt-submit-start', {
+          currentActiveSessionId: activeSessionIdRef.current,
+          currentRouteToken: getRouteToken(),
+          currentStoredSessionId: selectedStoredSessionIdRef.current,
+          runtimeSessionId: sessionId
+        })
 
         // On sleep/wake the gateway's in-memory session may have been cleared
         // while the desktop app still holds the old session ID. Detect this,
@@ -344,6 +430,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
 
             if (recoveredId) {
               activeSessionIdRef.current = recoveredId
+              adoptSessionBinding(recoveredId)
               await withSessionBusyRetry(() =>
                 requestGateway('prompt.submit', { session_id: recoveredId, text }, PROMPT_SUBMIT_REQUEST_TIMEOUT_MS)
               )
@@ -366,9 +453,14 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         // Submit landed — the turn now runs (busy stays true), but the submit
         // window is closed, so release the lock for the next (sequential) send.
         releaseSubmitLock()
+        diagnostic('prompt-submit-accepted', { runtimeSessionId: sessionId })
 
         return true
       } catch (err) {
+        diagnostic('prompt-submit-error', {
+          errorType: err instanceof Error ? err.name : typeof err,
+          runtimeSessionId: sessionId
+        })
         releaseBusy()
 
         // A queued drain that raced a not-yet-settled turn gets a transient

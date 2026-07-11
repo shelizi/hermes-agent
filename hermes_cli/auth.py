@@ -6325,6 +6325,57 @@ def _resolve_external_process_command_args(provider_id: str) -> tuple[str, list[
     return command, args
 
 
+def _resolve_external_process_command_path(
+    provider_id: str,
+    command: str | None = None,
+) -> str | None:
+    """Resolve an external-process command, including installed Devin CLI paths.
+
+    Devin's Windows installer keeps the active binary under the per-user
+    ``%LOCALAPPDATA%\\devin\\cli\\bin`` directory but does not necessarily add
+    that directory to PATH.  Hermes must therefore resolve that official
+    install location before declaring the provider unavailable. Explicit
+    command/path overrides and normal PATH resolution always take precedence.
+    """
+    if command is None:
+        command, _ = _resolve_external_process_command_args(provider_id)
+    command = str(command or "").strip()
+    if not command:
+        return None
+
+    resolved = shutil.which(command)
+    if resolved:
+        return resolved
+
+    if provider_id != "devin-acp":
+        return None
+
+    # Only apply the automatic install lookup to the default command name.
+    # A missing explicit override should remain a useful, actionable error.
+    command_name = Path(command).name.casefold()
+    if command_name not in {"devin", "devin.exe"}:
+        return None
+
+    roots: list[Path] = []
+    for env_name in ("LOCALAPPDATA", "APPDATA"):
+        raw_root = os.getenv(env_name, "").strip()
+        if raw_root:
+            roots.append(Path(raw_root))
+    roots.append(Path.home() / "AppData" / "Local")
+
+    seen: set[str] = set()
+    for root in roots:
+        candidate = root / "devin" / "cli" / "bin" / "devin.exe"
+        key = str(candidate).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.is_file():
+            return str(candidate)
+
+    return None
+
+
 def _devin_local_credentials_present() -> bool:
     """Best-effort check that Devin CLI has a local credentials file.
 
@@ -6397,7 +6448,7 @@ def get_external_process_provider_status(provider_id: str) -> Dict[str, Any]:
     if not base_url:
         base_url = pconfig.inference_base_url
 
-    resolved_command = shutil.which(command) if command else None
+    resolved_command = _resolve_external_process_command_path(provider_id, command)
     cli_installed = bool(resolved_command or base_url.startswith("acp+tcp://"))
     auth_present = _external_process_auth_present(provider_id)
     # Treat a confirmed-missing local auth file as not logged in even when
@@ -6635,7 +6686,7 @@ def resolve_external_process_provider_credentials(provider_id: str) -> Dict[str,
 
     spec = _external_process_spec(provider_id)
     command, args = _resolve_external_process_command_args(provider_id)
-    resolved_command = shutil.which(command) if command else None
+    resolved_command = _resolve_external_process_command_path(provider_id, command)
     if not resolved_command and not base_url.startswith("acp+tcp://"):
         raise AuthError(
             str(spec.get("missing_msg") or "Could not find external process CLI '{command}'.").format(

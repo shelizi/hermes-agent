@@ -47,11 +47,22 @@ _HERMES_PLACEHOLDER_MODELS = frozenset({
 
 
 def _resolve_command() -> str:
-    return (
+    command = (
         os.getenv("HERMES_DEVIN_ACP_COMMAND", "").strip()
         or os.getenv("DEVIN_CLI_PATH", "").strip()
-        or "devin"
     )
+    if command:
+        return command
+
+    # The Windows Devin installer stores its binary under LOCALAPPDATA but
+    # does not reliably add it to PATH. Reuse Hermes' provider resolver so
+    # status/setup and runtime spawn the same executable.
+    try:
+        from hermes_cli.auth import _resolve_external_process_command_path
+
+        return _resolve_external_process_command_path("devin-acp", "devin") or "devin"
+    except Exception:
+        return "devin"
 
 
 def _resolve_args() -> list[str]:

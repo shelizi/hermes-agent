@@ -5,9 +5,15 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from agent.devin_acp_client import ACP_MARKER_BASE_URL, DevinACPClient, _resolve_args
+from agent.devin_acp_client import (
+    ACP_MARKER_BASE_URL,
+    DevinACPClient,
+    _resolve_args,
+    _resolve_command,
+)
 from hermes_cli.auth import (
     PROVIDER_REGISTRY,
+    _resolve_external_process_command_path,
     get_external_process_provider_status,
     resolve_external_process_provider_credentials,
     resolve_provider,
@@ -27,6 +33,38 @@ class TestDevinAcpProviderRegistry(unittest.TestCase):
 
 
 class TestDevinAcpResolve(unittest.TestCase):
+    def test_windows_installer_path_is_resolved_when_not_on_path(self):
+        with self.subTest("shared auth resolver"):
+            with patch("hermes_cli.auth.shutil.which", return_value=None):
+                with patch.dict(
+                    "os.environ",
+                    {"LOCALAPPDATA": r"C:\Users\test\AppData\Local", "APPDATA": ""},
+                    clear=False,
+                ):
+                    with patch("pathlib.Path.is_file", return_value=True):
+                        resolved = _resolve_external_process_command_path("devin-acp", "devin")
+            assert resolved is not None
+            assert resolved.casefold().endswith(r"devin\cli\bin\devin.exe")
+
+        with self.subTest("ACP runtime resolver"):
+            with patch(
+                "agent.devin_acp_client._resolve_command",
+                wraps=_resolve_command,
+            ):
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "HERMES_DEVIN_ACP_COMMAND": "",
+                        "DEVIN_CLI_PATH": "",
+                        "LOCALAPPDATA": r"C:\Users\test\AppData\Local",
+                    },
+                    clear=False,
+                ):
+                    with patch("hermes_cli.auth.shutil.which", return_value=None):
+                        with patch("pathlib.Path.is_file", return_value=True):
+                            resolved = _resolve_command()
+            assert resolved.casefold().endswith(r"devin\cli\bin\devin.exe")
+
     def test_status_and_creds(self):
         with patch("hermes_cli.auth.shutil.which", return_value="/usr/local/bin/devin"):
             with patch(
@@ -652,8 +690,34 @@ class _ScriptedAcpProcess:
 class _ScriptedAcpProcessWithTrailingChunk(_ScriptedAcpProcess):
     """Popen stand-in that returns the session/prompt end_turn before the assistant chunk."""
 
+    def __init__(self, *, delay_seconds: float = 0.0) -> None:
+        super().__init__()
+        self.delay_seconds = delay_seconds
+
+    def _push_chunk(self) -> None:
+        import json
+
+        chunk = {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": f"ok-{self.session_seq}"},
+                }
+            },
+        }
+        self.stdout.push(json.dumps(chunk) + "\n")
+
+    def _push_delayed_chunk(self) -> None:
+        import time
+
+        time.sleep(self.delay_seconds)
+        self._push_chunk()
+
     def write(self, data: str) -> int:
         import json
+        import threading
 
         line = data.strip()
         if not line:
@@ -671,17 +735,13 @@ class _ScriptedAcpProcessWithTrailingChunk(_ScriptedAcpProcess):
             result = {"stopReason": "end_turn"}
             resp = {"jsonrpc": "2.0", "id": req_id, "result": result}
             self.stdout.push(json.dumps(resp) + "\n")
-            chunk = {
-                "jsonrpc": "2.0",
-                "method": "session/update",
-                "params": {
-                    "update": {
-                        "sessionUpdate": "agent_message_chunk",
-                        "content": {"type": "text", "text": f"ok-{self.session_seq}"},
-                    }
-                },
-            }
-            self.stdout.push(json.dumps(chunk) + "\n")
+            if self.delay_seconds:
+                threading.Thread(
+                    target=self._push_delayed_chunk,
+                    daemon=True,
+                ).start()
+            else:
+                self._push_chunk()
             return len(data)
         else:
             result = {}
@@ -891,6 +951,25 @@ class TestAcpProcessReuse(unittest.TestCase):
             proc = _ScriptedAcpProcessWithTrailingChunk()
             procs.append(proc)
             return proc
+
+        with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+            client = CopilotACPClient(
+                command="fake-acp",
+                args=["--stdio"],
+                acp_cwd="/tmp",
+            )
+            client._reuse_enabled = True
+            client._session_reuse_enabled = False
+            r1, _ = client._run_prompt("first", timeout_seconds=5)
+            client.close()
+
+        assert r1 == "ok-1"
+
+    def test_session_prompt_waits_for_delayed_first_agent_message_chunk(self):
+        from agent.copilot_acp_client import CopilotACPClient
+
+        def _popen(*_a, **_k):
+            return _ScriptedAcpProcessWithTrailingChunk(delay_seconds=0.45)
 
         with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
             client = CopilotACPClient(
