@@ -48,6 +48,38 @@ import type { ClientSessionState } from '../../../types'
 
 import { hasSessionInfoStatePatch, sessionInfoStatePatch, SUBAGENT_EVENT_TYPES, toTodoPayload } from './utils'
 
+function logGatewayEventDiagnostic(
+  event: RpcEvent,
+  sessionId: string,
+  activeSessionId: string | null,
+  payload: GatewayEventPayload | undefined
+) {
+  // Electron forwards renderer console.error entries to desktop.log. Only log
+  // terminal events (and errors), never message.delta, and never the response
+  // text itself. This lets us distinguish "submit never sent" from "backend
+  // replied but the renderer missed the event" without leaking user content.
+  if (typeof window === 'undefined' || !window.hermesDesktop) {
+    return
+  }
+
+  if (!['message.start', 'message.complete', 'error'].includes(event.type)) {
+    return
+  }
+
+  try {
+    console.error(
+      `[hermes-gateway-diagnostic] ${JSON.stringify({
+        activeSessionId,
+        event: event.type,
+        hasText: Boolean(payload?.text || payload?.rendered),
+        sessionId: sessionId || null
+      })}`
+    )
+  } catch {
+    // Diagnostics must never affect event handling.
+  }
+}
+
 interface GatewayEventDeps {
   activeSessionIdRef: MutableRefObject<string | null>
   compactedTurnRef: MutableRefObject<Set<string>>
@@ -99,11 +131,14 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
       const explicitSid = event.session_id || ''
 
       if (!explicitSid && gatewayEventRequiresSessionId(event.type)) {
+        logGatewayEventDiagnostic(event, '', activeSessionIdRef.current, payload)
+
         return
       }
 
       const sessionId = explicitSid || activeSessionIdRef.current
       const isActiveEvent = !!sessionId && sessionId === activeSessionIdRef.current
+      logGatewayEventDiagnostic(event, sessionId || '', activeSessionIdRef.current, payload)
 
       if (event.type === 'gateway.ready') {
         return
