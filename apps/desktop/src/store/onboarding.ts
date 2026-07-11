@@ -72,6 +72,7 @@ export interface DesktopOnboardingState {
    *  custom endpoint"). Forces the API-key form with the local option
    *  preselected instead of the OAuth picker. */
   localEndpoint: boolean
+  pendingProviderOAuthId?: null | string
 }
 
 export interface OnboardingContext {
@@ -151,7 +152,8 @@ const INITIAL: DesktopOnboardingState = {
   requested: false,
   firstRunSkipped: readCachedSkipped(),
   manual: false,
-  localEndpoint: false
+  localEndpoint: false,
+  pendingProviderOAuthId: null
 }
 
 export const $desktopOnboarding = atom<DesktopOnboardingState>(INITIAL)
@@ -414,11 +416,11 @@ export function startManualOnboarding(reason: null | string = DEFAULT_MANUAL_ONB
 // (`custom` is not an OAuth provider, so the generic manual flow would just
 // re-show the picker — the original "booted back to the first screen" loop).
 export function startManualLocalEndpoint(reason: null | string = null) {
-  pendingProviderOAuthId = null
   patch({
     manual: true,
     requested: true,
     localEndpoint: true,
+    pendingProviderOAuthId: null,
     mode: 'apikey',
     reason: reason ? reason.trim() || DEFAULT_ONBOARDING_REASON : null,
     flow: { status: 'idle' }
@@ -429,13 +431,9 @@ export function startManualLocalEndpoint(reason: null | string = null) {
 // specific provider's sign-in: we open the manual onboarding overlay AND
 // remember which provider to start, so the overlay drives that exact OAuth
 // flow instead of re-showing the picker the user just clicked through.
-// Module-level (not store state) because it's consumed immediately on the next
-// overlay render and never needs to persist or re-render anything itself.
-let pendingProviderOAuthId: null | string = null
-
 export function startManualProviderOAuth(providerId: string, reason: null | string = null) {
-  pendingProviderOAuthId = providerId
   startManualOnboarding(reason)
+  patch({ pendingProviderOAuthId: providerId })
 }
 
 // Read the pending provider id without clearing it. The overlay only clears it
@@ -443,20 +441,24 @@ export function startManualProviderOAuth(providerId: string, reason: null | stri
 // so a transient empty/failed provider fetch doesn't drop the hand-off and the
 // deep-link can still auto-start after the list loads.
 export function peekPendingProviderOAuth(): null | string {
-  return pendingProviderOAuthId
+  return $desktopOnboarding.get().pendingProviderOAuthId ?? null
 }
 
 export function clearPendingProviderOAuth() {
-  pendingProviderOAuthId = null
+  patch({ pendingProviderOAuthId: null })
 }
 
 // Dismiss a manually-opened provider selector without touching the existing
 // (working) configuration. Only valid in the manual path — the unconfigured
 // first-run flow has no close affordance because the app can't run yet.
 export function closeManualOnboarding() {
-  pendingProviderOAuthId = null
-
-  patch({ manual: false, requested: false, localEndpoint: false, flow: { status: 'idle' } })
+  patch({
+    manual: false,
+    requested: false,
+    localEndpoint: false,
+    pendingProviderOAuthId: null,
+    flow: { status: 'idle' }
+  })
 }
 
 export function completeDesktopOnboarding() {
@@ -474,7 +476,8 @@ export function completeDesktopOnboarding() {
     requested: false,
     firstRunSkipped: false,
     manual: false,
-    localEndpoint: false
+    localEndpoint: false,
+    pendingProviderOAuthId: null
   })
 }
 
@@ -487,7 +490,7 @@ export function completeDesktopOnboarding() {
 export function dismissFirstRunOnboarding() {
   clearPoll()
   writeCachedSkipped(true)
-  patch({ firstRunSkipped: true, requested: false, manual: false, localEndpoint: false, flow: { status: 'idle' } })
+  patch({ firstRunSkipped: true, requested: false, manual: false, localEndpoint: false, pendingProviderOAuthId: null, flow: { status: 'idle' } })
 }
 
 export function setOnboardingMode(mode: OnboardingMode) {

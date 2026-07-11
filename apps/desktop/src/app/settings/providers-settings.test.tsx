@@ -88,6 +88,15 @@ describe('ProvidersSettings', () => {
     expect(listOAuthProviders).toHaveBeenCalledTimes(2)
   })
 
+  it('loads accounts when remounted while onboarding is active', async () => {
+    onboarding.set({ manual: true })
+
+    await renderProvidersSettings()
+
+    expect(await screen.findByText('Nous Portal')).toBeTruthy()
+    expect(listOAuthProviders).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps provider selection separate from account removal', async () => {
     await renderProvidersSettings()
 
