@@ -964,6 +964,19 @@ class CopilotACPClient:
         """
         del session_id, session, model, timeout_seconds
 
+    def _session_mcp_servers(
+        self,
+        tools: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """Return MCP servers to attach to a new ACP session.
+
+        The base ACP adapter does not add any host-specific servers.  Providers
+        that can use Hermes-owned MCP bridges may override this hook without
+        changing the shared ACP lifecycle.
+        """
+        del tools
+        return []
+
     def _spawn_process(self) -> subprocess.Popen[str]:
         label = self._acp_display_name
         try:
@@ -1201,7 +1214,7 @@ class CopilotACPClient:
                     "session/new",
                     {
                         "cwd": self._acp_cwd,
-                        "mcpServers": [],
+                        "mcpServers": self._session_mcp_servers(tools),
                     },
                     timeout_seconds=timeout_seconds,
                 ) or {}

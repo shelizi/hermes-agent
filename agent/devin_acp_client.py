@@ -241,6 +241,28 @@ class DevinACPClient(CopilotACPClient):
             return [self._acp_command, "--model", desired, *list(self._acp_args)]
         return [self._acp_command, *list(self._acp_args)]
 
+    def _session_mcp_servers(
+        self,
+        tools: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """Attach the minimal Hermes memory bridge when memory is granted."""
+        tool_names = {
+            item.get("function", {}).get("name")
+            for item in (tools or [])
+            if isinstance(item, dict)
+        }
+        if "memory" not in tool_names:
+            return []
+        try:
+            from agent.transports.hermes_memory_mcp_server import (
+                build_acp_server_config,
+            )
+
+            return build_acp_server_config()
+        except Exception as exc:
+            logger.warning("Devin ACP memory bridge disabled: %s", exc)
+            return []
+
     def _spawn_process(self):
         proc = super()._spawn_process()
         self._process_bound_model = self._desired_process_model

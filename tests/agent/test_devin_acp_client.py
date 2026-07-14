@@ -262,6 +262,24 @@ class TestDevinAcpClientDefaults(unittest.TestCase):
         assert "Devin CLI" in client._install_hint
         assert "Copilot" not in client._install_hint
 
+    def test_memory_mcp_bridge_is_attached_only_when_memory_is_granted(self):
+        client = DevinACPClient(acp_cwd="/tmp", command="devin", args=["acp"])
+        memory_tools = [
+            {
+                "type": "function",
+                "function": {"name": "memory"},
+            }
+        ]
+        with patch(
+            "agent.transports.hermes_memory_mcp_server.build_acp_server_config",
+            return_value=[{"name": "hermes-memory"}],
+        ) as build:
+            assert client._session_mcp_servers([]) == []
+            assert client._session_mcp_servers(memory_tools) == [
+                {"name": "hermes-memory"}
+            ]
+        build.assert_called_once_with()
+
 
 class TestAcpClientFactory(unittest.TestCase):
     def test_create_devin(self):
