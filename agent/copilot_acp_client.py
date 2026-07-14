@@ -665,6 +665,15 @@ class CopilotACPClient:
         """Attach an AIAgent so ACP tool/session updates surface in the UI."""
         self._activity_agent = agent
 
+    def _prompt_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        """Return tools to describe in the textual ACP prompt.
+
+        ACP providers that expose tools through a native MCP connection can
+        override this hook and leave the tool list out of the prompt. The
+        original list is still passed to ``session/new`` for allowlisting.
+        """
+        return tools
+
     def _emit_acp_activity(
         self,
         event_type: str,
@@ -1181,7 +1190,7 @@ class CopilotACPClient:
                     prompt_text = _format_messages_as_prompt(
                         messages[prefix_len:],
                         model=model,
-                        tools=tools,
+                        tools=self._prompt_tools(tools),
                         tool_choice=tool_choice,
                         continuation=True,
                     )
@@ -1206,7 +1215,7 @@ class CopilotACPClient:
                 prompt_text = _format_messages_as_prompt(
                     messages,
                     model=model,
-                    tools=tools,
+                    tools=self._prompt_tools(tools),
                     tool_choice=tool_choice,
                     continuation=False,
                 )

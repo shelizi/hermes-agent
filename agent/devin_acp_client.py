@@ -253,7 +253,7 @@ class DevinACPClient(CopilotACPClient):
         }
         servers: list[dict[str, Any]] = []
 
-        if "memory" in tool_names:
+        if tools is None or "memory" in tool_names:
             try:
                 from agent.transports.hermes_memory_mcp_server import (
                     build_acp_server_config,
@@ -268,11 +268,26 @@ class DevinACPClient(CopilotACPClient):
                 build_acp_server_config,
             )
 
-            servers.extend(build_acp_server_config(allowed_tools=tool_names))
+            if tools is None:
+                servers.extend(build_acp_server_config())
+            else:
+                servers.extend(build_acp_server_config(allowed_tools=tool_names))
         except Exception as exc:
             logger.warning("Devin ACP Hermes-tools bridge disabled: %s", exc)
 
         return servers
+
+    def _prompt_tools(self, tools: list[dict[str, Any]] | None) -> None:
+        """Use Devin's native MCP tools instead of textual XML tool calls.
+
+        Some Devin models (notably GLM) emit reasoning-only responses when an
+        OpenAI function schema is duplicated in the user prompt. The MCP
+        servers supplied at session setup already publish the authoritative
+        tool schemas to Devin, so keeping a second textual tool protocol only
+        creates a competing interface.
+        """
+        del tools
+        return None
 
     def _spawn_process(self):
         proc = super()._spawn_process()

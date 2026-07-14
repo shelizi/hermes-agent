@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from pathlib import Path
+
+import pytest
 
 
 class TestModuleSurface:
@@ -122,6 +125,31 @@ class TestAcpBridge:
 
 
 class TestMain:
+    def test_registered_tools_preserve_hermes_argument_schema(self, monkeypatch):
+        pytest.importorskip("mcp.server.fastmcp")
+
+        import model_tools
+        from agent.transports.hermes_tools_mcp_server import _build_server
+
+        monkeypatch.setenv("HERMES_ACP_MCP_TOOLS", '["skill_view"]')
+        monkeypatch.setattr(
+            model_tools,
+            "handle_function_call",
+            lambda name, args: json.dumps({"name": name, "args": args}),
+        )
+
+        server = _build_server()
+        tool = server._tool_manager._tools["skill_view"]
+
+        assert set(tool.parameters["properties"]) == {"name", "file_path"}
+        assert tool.parameters["required"] == ["name"]
+        assert "kwargs" not in tool.parameters["properties"]
+        result = asyncio.run(tool.run({"name": "annas-archive-ebooks"}))
+        assert json.loads(result)["args"] == {
+            "name": "annas-archive-ebooks",
+            "file_path": None,
+        }
+
     def test_main_returns_2_when_mcp_unavailable(self, monkeypatch):
         import agent.transports.hermes_tools_mcp_server as m
 

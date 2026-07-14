@@ -42,6 +42,7 @@ Spawned by: CodexAppServerSession.ensure_started() when the runtime is
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -106,6 +107,56 @@ EXPOSED_TOOLS: tuple[str, ...] = (
 ACP_SERVER_NAME = "hermes-tools"
 _ACP_ALLOWED_TOOLS_ENV = "HERMES_ACP_MCP_TOOLS"
 _todo_store: Any = None
+
+
+def _handler_signature(parameters: dict[str, Any]) -> inspect.Signature:
+    """Build a callable signature from an OpenAI JSON-schema object.
+
+    FastMCP derives a tool's input model from the Python callable.  A generic
+    ``def handler(**kwargs)`` therefore becomes a schema requiring a literal
+    ``kwargs`` object, which is incompatible with the Hermes tool schema.  A
+    synthetic keyword-only signature keeps FastMCP's validation layer while
+    preserving the real argument names and required/optional split.
+    """
+    properties = parameters.get("properties") or {}
+    required = set(parameters.get("required") or [])
+    if not isinstance(properties, dict):
+        properties = {}
+
+    signature_parameters: list[inspect.Parameter] = []
+    for name, spec in properties.items():
+        if not isinstance(name, str) or not name.isidentifier() or name == "self":
+            # Hermes tool schemas use ordinary identifier names.  Ignore an
+            # unexpected property rather than constructing an invalid Python
+            # signature and taking down the whole ACP bridge.
+            continue
+        if not isinstance(spec, dict):
+            spec = {}
+        default = inspect.Parameter.empty if name in required else spec.get("default", None)
+        signature_parameters.append(
+            inspect.Parameter(
+                name,
+                inspect.Parameter.KEYWORD_ONLY,
+                default=default,
+                annotation=Any,
+            )
+        )
+
+    return inspect.Signature(signature_parameters)
+
+
+def _apply_tool_schema(server: Any, name: str, parameters: dict[str, Any]) -> None:
+    """Replace FastMCP's inferred schema with Hermes' authoritative schema.
+
+    The synthetic signature is sufficient for older MCP SDKs.  Newer SDKs
+    expose the registered Tool object, so also replace its published schema
+    to retain descriptions, enums, defaults, and nested structures.
+    """
+    manager = getattr(server, "_tool_manager", None)
+    tools = getattr(manager, "_tools", None)
+    tool = tools.get(name) if isinstance(tools, dict) else None
+    if tool is not None and hasattr(tool, "parameters"):
+        tool.parameters = parameters
 
 
 def build_acp_server_config(
@@ -254,21 +305,16 @@ def _build_server() -> Any:
                     return json.dumps({"error": str(exc), "tool": tool_name})
             _dispatch.__name__ = tool_name
             _dispatch.__doc__ = description
+            _dispatch.__signature__ = _handler_signature(params_schema)
             return _dispatch
 
-        try:
-            mcp.add_tool(
-                _make_handler(name),
-                name=name,
-                description=description,
-                # FastMCP accepts JSON schema directly via the
-                # input_schema parameter on newer versions; older
-                # versions use parameters_schema. Try both for compat.
-            )
-        except TypeError:
-            # Older mcp SDK signature — fall back to decorator-style.
-            handler = _make_handler(name)
-            handler = mcp.tool(name=name, description=description)(handler)
+        mcp.add_tool(
+            _make_handler(name),
+            name=name,
+            description=description,
+            structured_output=False,
+        )
+        _apply_tool_schema(mcp, name, params_schema)
 
         exposed_count += 1
 

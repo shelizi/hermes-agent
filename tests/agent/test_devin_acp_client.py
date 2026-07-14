@@ -304,6 +304,29 @@ class TestDevinAcpClientDefaults(unittest.TestCase):
             "session_search",
         }
 
+    def test_native_mcp_tools_are_not_duplicated_in_text_prompt(self):
+        client = DevinACPClient(acp_cwd="/tmp", command="devin", args=["acp"])
+        tools = [{"type": "function", "function": {"name": "skill_view"}}]
+
+        assert client._prompt_tools(tools) is None
+
+    def test_native_mcp_bridge_exposes_all_tools_without_prompt_schema(self):
+        client = DevinACPClient(acp_cwd="/tmp", command="devin", args=["acp"])
+        with patch(
+            "agent.transports.hermes_memory_mcp_server.build_acp_server_config",
+            return_value=[{"name": "hermes-memory"}],
+        ) as memory_build, patch(
+            "agent.transports.hermes_tools_mcp_server.build_acp_server_config",
+            return_value=[{"name": "hermes-tools"}],
+        ) as tools_build:
+            assert client._session_mcp_servers(None) == [
+                {"name": "hermes-memory"},
+                {"name": "hermes-tools"},
+            ]
+
+        memory_build.assert_called_once_with()
+        tools_build.assert_called_once_with()
+
 
 class TestAcpClientFactory(unittest.TestCase):
     def test_create_devin(self):
