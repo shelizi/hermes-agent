@@ -766,6 +766,36 @@ _clamp_telegram_names = _clamp_command_names
 # Shared skill/plugin collection for gateway platforms
 # ---------------------------------------------------------------------------
 
+def _path_is_within(path: str, roots: list[str]) -> bool:
+    """Return whether path is inside one of roots.
+
+    Skill paths come from pathlib.Path on disk, so Windows uses backslashes
+    while the old string-prefix check appended a forward slash. Normalizing
+    both sides also preserves the path-boundary check (skills-extra must not
+    match skills).
+    """
+    try:
+        candidate = os.path.normcase(
+            os.path.realpath(os.path.abspath(os.fspath(path)))
+        )
+    except (OSError, TypeError, ValueError):
+        return False
+
+    for root in roots:
+        try:
+            normalized_root = os.path.normcase(
+                os.path.realpath(os.path.abspath(os.fspath(root)))
+            )
+            if (
+                os.path.commonpath((candidate, normalized_root))
+                == normalized_root
+            ):
+                return True
+        except (OSError, TypeError, ValueError):
+            continue
+    return False
+
+
 def _collect_gateway_skill_entries(
     platform: str,
     max_slots: int,
@@ -838,27 +868,26 @@ def _collect_gateway_skill_entries(
         from agent.skill_commands import get_skill_commands
         from tools.skills_tool import SKILLS_DIR
         from agent.skill_utils import get_external_skills_dirs
-        _skills_dir = str(SKILLS_DIR.resolve())
-        _hub_dir = str((SKILLS_DIR / ".hub").resolve()).rstrip("/") + "/"
-        # Build set of allowed directory prefixes: local skills dir + any
-        # user-configured ``skills.external_dirs``. Ensure each prefix ends
-        # with ``/`` so ``/my-skills`` does not also match ``/my-skills-extra``.
-        # Without this widening, external skills are visible in
-        # ``hermes skills list`` and the agent's ``/skill-name`` dispatch but
-        # silently excluded from gateway slash menus (#8110).
-        _allowed_prefixes = [_skills_dir.rstrip("/") + "/"]
-        _allowed_prefixes.extend(
-            str(d).rstrip("/") + "/" for d in get_external_skills_dirs()
-        )
+        # Build allowed roots from the local skills directory and any
+        # user-configured skills.external_dirs. Normalize with
+        # os.path.commonpath instead of slash-delimited strings:
+        # skill_md_path is produced by pathlib and uses native separators
+        # (backslashes on Windows). Without this, skills are visible to the
+        # agent and CLI but silently excluded from gateway slash menus (#8110).
+        _allowed_roots = [
+            os.fspath(SKILLS_DIR),
+            *(os.fspath(d) for d in get_external_skills_dirs()),
+        ]
+        _hub_root = os.fspath(SKILLS_DIR / ".hub")
         skill_cmds = get_skill_commands()
         for cmd_key in sorted(skill_cmds):
             info = skill_cmds[cmd_key]
             skill_path = info.get("skill_md_path", "")
             if not skill_path:
                 continue
-            if not any(skill_path.startswith(prefix) for prefix in _allowed_prefixes):
+            if not _path_is_within(skill_path, _allowed_roots):
                 continue
-            if skill_path.startswith(_hub_dir):
+            if _path_is_within(skill_path, [_hub_root]):
                 continue
             skill_name = info.get("name", "")
             if skill_name in _platform_disabled:

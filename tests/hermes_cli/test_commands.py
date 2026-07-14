@@ -1524,6 +1524,38 @@ class TestTelegramMenuCommands:
             "prefix-match sibling directories must not be admitted"
         )
 
+    def test_native_path_separators_are_included_in_telegram_menu(
+        self, tmp_path, monkeypatch
+    ):
+        """Skills scanned by pathlib must survive the gateway path filter.
+
+        On Windows, str(Path(...)) uses backslashes. This reproduces the
+        native path shape returned by agent.skill_commands.scan_skill_commands.
+        """
+        from unittest.mock import patch
+
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        skill_md = skills_dir / "devin-cli" / "SKILL.md"
+        fake_cmds = {
+            "/devin-cli": {
+                "name": "devin-cli",
+                "description": "Delegate bounded work to Devin CLI",
+                "skill_md_path": str(skill_md),
+                "skill_dir": str(skill_md.parent),
+            },
+        }
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        with (
+            patch("agent.skill_commands.get_skill_commands", return_value=fake_cmds),
+            patch("tools.skills_tool.SKILLS_DIR", skills_dir),
+            patch("agent.skill_utils.get_external_skills_dirs", return_value=[]),
+        ):
+            menu, _ = telegram_menu_commands(max_commands=100)
+
+        assert "devin_cli" in {name for name, _ in menu}
+
     def test_special_chars_in_skill_names_sanitized(self, tmp_path, monkeypatch):
         """Skills with +, /, or other special chars produce valid Telegram names."""
         from unittest.mock import patch
