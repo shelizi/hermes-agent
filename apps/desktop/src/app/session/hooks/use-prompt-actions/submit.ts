@@ -134,7 +134,9 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
 
       // Pin the session context for the whole async submit pipeline. Without
       // this, a fast session switch during session.resume / file.attach can
-      // redirect the user's text into a different chat (#54527).
+      // redirect the user's text into a different chat (#54527). Mutable —
+      // not const — because a new-chat submit legitimately re-homes to the
+      // session it creates (see the re-pin after createBackendSessionForSend).
       const startingActiveSessionId = activeSessionIdRef.current
       const startingStoredSessionId = selectedStoredSessionIdRef.current
       const startingRouteToken = getRouteToken()
@@ -344,6 +346,13 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         }
 
         if (!sessionId) {
+          // createBackendSessionForSend returns null when the user switched
+          // sessions mid-create (it closes the orphaned session itself) —
+          // abort silently. Anything else is a real failure worth a toast.
+          if (sessionContextDrifted()) {
+            return abortForSessionSwitch(null)
+          }
+
           dropOptimistic(null)
           releaseBusy()
           notify({ kind: 'error', title: copy.sessionUnavailable, message: copy.createSessionFailed })
