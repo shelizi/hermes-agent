@@ -1,90 +1,69 @@
-"""Tests for the hermes-tools-as-MCP server module surface.
-
-We don't run a live MCP session in unit tests — that requires the codex
-subprocess + client + an event loop. These tests pin the static
-contract: the module imports, the EXPOSED_TOOLS list is sane, and the
-build helper assembles a server when the SDK is present.
-"""
+"""Tests for the hermes-tools-as-MCP server module surface."""
 
 from __future__ import annotations
 
-
+import json
+from pathlib import Path
 
 
 class TestModuleSurface:
     def test_module_imports_clean(self):
         from agent.transports import hermes_tools_mcp_server as m
+
         assert callable(m.main)
         assert callable(m._build_server)
         assert isinstance(m.EXPOSED_TOOLS, tuple)
         assert len(m.EXPOSED_TOOLS) > 0
 
     def test_exposed_tools_are_safe_subset(self):
-        """We MUST NOT expose tools codex already has, because codex'
-        own builtins are better-integrated with its sandbox + approvals.
-        Specifically: no terminal/shell, no read_file/write_file, no
-        patch — those are codex's built-in tools."""
+        """Do not duplicate terminal/file tools already provided by Codex."""
         from agent.transports.hermes_tools_mcp_server import EXPOSED_TOOLS
+
         forbidden = {
             "terminal", "shell", "read_file", "write_file", "patch",
             "search_files", "process",
         }
         leaked = forbidden & set(EXPOSED_TOOLS)
-        assert not leaked, (
-            f"these tools must NOT be exposed via the codex callback "
-            f"because codex has built-in equivalents: {leaked}"
-        )
+        assert not leaked
 
     def test_expected_hermes_specific_tools_listed(self):
-        """The Hermes-specific tools should be present so users on the
-        codex runtime keep access to them."""
         from agent.transports.hermes_tools_mcp_server import EXPOSED_TOOLS
+
         for required in (
             "web_search",
             "web_extract",
             "browser_navigate",
             "vision_analyze",
             "image_generate",
+            "skills_list",
             "skill_view",
+            "skill_manage",
+            "todo",
+            "session_search",
         ):
             assert required in EXPOSED_TOOLS, f"missing {required!r}"
 
-    def test_agent_loop_tools_not_exposed(self):
-        """delegate_task / memory / session_search / todo require the
-        running AIAgent context to dispatch, so a stateless MCP callback
-        can't drive them. They must NOT be in EXPOSED_TOOLS."""
+    def test_interactive_agent_loop_tools_not_exposed(self):
+        """These require a live AIAgent or interactive UI callback."""
         from agent.transports.hermes_tools_mcp_server import EXPOSED_TOOLS
-        for agent_loop_tool in ("delegate_task", "memory", "session_search", "todo"):
-            assert agent_loop_tool not in EXPOSED_TOOLS, (
-                f"{agent_loop_tool!r} requires the agent loop context "
-                "and can't be reached through a stateless MCP callback"
-            )
+
+        for unavailable in ("delegate_task", "clarify", "memory"):
+            assert unavailable not in EXPOSED_TOOLS
 
     def test_kanban_worker_tools_exposed(self):
-        """Kanban workers run as `hermes chat -q` subprocesses; if they
-        come up on the codex_app_server runtime, the worker can do the
-        actual work via codex's shell but needs the kanban tools through
-        the MCP callback to report back to the kernel. Without these
-        tools available, the worker would hang at completion time."""
         from agent.transports.hermes_tools_mcp_server import EXPOSED_TOOLS
-        # Worker handoff tools — every dispatched worker uses at least
-        # one of {complete, block, comment} to close out its task.
+
         for worker_tool in (
             "kanban_complete",
             "kanban_block",
             "kanban_comment",
             "kanban_heartbeat",
         ):
-            assert worker_tool in EXPOSED_TOOLS, (
-                f"{worker_tool!r} missing from codex callback — kanban "
-                "workers on codex_app_server runtime would hang"
-            )
+            assert worker_tool in EXPOSED_TOOLS
 
     def test_kanban_orchestrator_tools_exposed(self):
-        """Orchestrator agents need to dispatch new tasks, query the
-        board, and unblock/link tasks. Exposed so an orchestrator on
-        codex_app_server can do its job."""
         from agent.transports.hermes_tools_mcp_server import EXPOSED_TOOLS
+
         for orch_tool in (
             "kanban_create",
             "kanban_show",
@@ -92,15 +71,58 @@ class TestModuleSurface:
             "kanban_unblock",
             "kanban_link",
         ):
-            assert orch_tool in EXPOSED_TOOLS, (
-                f"{orch_tool!r} missing from codex callback"
+            assert orch_tool in EXPOSED_TOOLS
+
+
+class TestAcpBridge:
+    def test_build_acp_server_config_preserves_the_session_allowlist(self, monkeypatch, tmp_path):
+        from agent.transports.hermes_tools_mcp_server import build_acp_server_config
+
+        monkeypatch.setattr("hermes_constants.get_hermes_home", lambda: tmp_path)
+
+        servers = build_acp_server_config(
+            ["skills_list", "skill_view", "skill_manage", "todo", "session_search"]
+        )
+
+        assert len(servers) == 1
+        server = servers[0]
+        assert server["name"] == "hermes-tools"
+        assert Path(server["command"]).is_absolute()
+        assert server["args"] == ["-m", "agent.transports.hermes_tools_mcp_server"]
+        env = {item["name"]: item["value"] for item in server["env"]}
+        assert json.loads(env["HERMES_ACP_MCP_TOOLS"]) == [
+            "session_search",
+            "skill_manage",
+            "skill_view",
+            "skills_list",
+            "todo",
+        ]
+
+    def test_stateless_todo_keeps_state_inside_the_mcp_process(self, monkeypatch):
+        from agent.transports import hermes_tools_mcp_server as bridge
+
+        monkeypatch.setattr(bridge, "_todo_store", None)
+
+        first = json.loads(
+            bridge._dispatch_stateless_tool(
+                "todo",
+                {"todos": [{"id": "one", "content": "First task", "status": "pending"}]},
             )
+        )
+        second = json.loads(bridge._dispatch_stateless_tool("todo", {}))
+
+        assert first["todos"] == second["todos"]
+        assert second["todos"][0]["id"] == "one"
+
+    def test_stateless_dispatch_leaves_unrepresentable_tools_unhandled(self):
+        from agent.transports.hermes_tools_mcp_server import _dispatch_stateless_tool
+
+        assert _dispatch_stateless_tool("delegate_task", {}) is None
+        assert _dispatch_stateless_tool("clarify", {}) is None
 
 
 class TestMain:
     def test_main_returns_2_when_mcp_unavailable(self, monkeypatch):
-        """When the mcp package isn't installed, main() should exit
-        cleanly with code 2 and an install hint, not crash."""
         import agent.transports.hermes_tools_mcp_server as m
 
         def boom_build(*a, **kw):

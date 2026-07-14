@@ -280,6 +280,30 @@ class TestDevinAcpClientDefaults(unittest.TestCase):
             ]
         build.assert_called_once_with()
 
+    def test_hermes_tools_mcp_bridge_uses_granted_tool_names(self):
+        client = DevinACPClient(acp_cwd="/tmp", command="devin", args=["acp"])
+        tools = [
+            {"type": "function", "function": {"name": "skills_list"}},
+            {"type": "function", "function": {"name": "skill_view"}},
+            {"type": "function", "function": {"name": "skill_manage"}},
+            {"type": "function", "function": {"name": "todo"}},
+            {"type": "function", "function": {"name": "session_search"}},
+        ]
+        with patch(
+            "agent.transports.hermes_tools_mcp_server.build_acp_server_config",
+            return_value=[{"name": "hermes-tools"}],
+        ) as build:
+            assert client._session_mcp_servers(tools) == [{"name": "hermes-tools"}]
+
+        build.assert_called_once()
+        assert set(build.call_args.kwargs["allowed_tools"]) == {
+            "skills_list",
+            "skill_view",
+            "skill_manage",
+            "todo",
+            "session_search",
+        }
+
 
 class TestAcpClientFactory(unittest.TestCase):
     def test_create_devin(self):

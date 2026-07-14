@@ -2,9 +2,9 @@
 
 When the user runs `openai/*` turns through the codex app-server, codex
 owns the loop and builds its own tool list. By default, that means
-Hermes' richer tool surface — web search, browser automation,
-delegate_task subagents, vision analysis, persistent memory, skills,
-cross-session search, image generation, TTS — is unreachable.
+Hermes' richer tool surface — web search, browser automation, vision analysis,
+persistent memory, skills, cross-session search, image generation, TTS — is
+unreachable.
 
 This module exposes a curated subset of those Hermes tools to the
 spawned codex subprocess via stdio MCP. Codex registers it as a normal
@@ -18,7 +18,8 @@ Scope (what we expose):
     _get_images / _console / _vision
   - vision_analyze                       — image inspection by vision model
   - image_generate                       — image generation
-  - skill_view, skills_list              — Hermes' skill library
+  - skill_view, skills_list, skill_manage — Hermes' skill library
+  - todo, session_search                 — stateless session-local helpers
   - text_to_speech                       — TTS
   - kanban_* (complete/block/comment/    — kanban worker + orchestrator
     heartbeat/show/list/create/            handoff (stateless: read env var,
@@ -29,13 +30,10 @@ What we DO NOT expose:
   - read_file / write_file / patch       — codex's apply_patch + shell
   - search_files / process               — codex's shell
   - clarify                              — codex's own UX
-  - delegate_task / memory /             — `_AGENT_LOOP_TOOLS` in Hermes
-    session_search / todo                  (model_tools.py). They require
-                                           the running AIAgent context to
-                                           dispatch (mid-loop state), so a
-                                           stateless MCP callback can't
-                                           drive them. See the inline
-                                           comment on EXPOSED_TOOLS below.
+  - delegate_task / clarify              — require the running AIAgent or
+                                           interactive UI context and cannot
+                                           be represented safely as a
+                                           stateless MCP callback.
 
 Run with: python -m agent.transports.hermes_tools_mcp_server
 Spawned by: CodexAppServerSession.ensure_started() when the runtime is
@@ -48,6 +46,7 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -60,11 +59,8 @@ logger = logging.getLogger(__name__)
 #   - terminal / shell / read_file / write_file / patch / search_files /
 #     process — codex's built-ins cover these and approval routes through
 #     codex's own UI.
-#   - delegate_task / memory / session_search / todo — these are
-#     `_AGENT_LOOP_TOOLS` in Hermes (model_tools.py:493). They require
-#     the running AIAgent context to dispatch (mid-loop state), so a
-#     stateless MCP callback can't drive them. Hermes' default runtime
-#     keeps these working; the codex_app_server runtime cannot.
+#   - delegate_task / clarify — these require a live AIAgent or interactive
+#     UI callback and cannot be made correct by a stateless MCP process.
 EXPOSED_TOOLS: tuple[str, ...] = (
     "web_search",
     "web_extract",
@@ -82,6 +78,9 @@ EXPOSED_TOOLS: tuple[str, ...] = (
     "image_generate",
     "skill_view",
     "skills_list",
+    "skill_manage",
+    "todo",
+    "session_search",
     "text_to_speech",
     # Kanban worker handoff tools — gated on HERMES_KANBAN_TASK env var
     # (set by the kanban dispatcher when spawning a worker). Without these
@@ -103,6 +102,87 @@ EXPOSED_TOOLS: tuple[str, ...] = (
     "kanban_unblock",
     "kanban_link",
 )
+
+ACP_SERVER_NAME = "hermes-tools"
+_ACP_ALLOWED_TOOLS_ENV = "HERMES_ACP_MCP_TOOLS"
+_todo_store: Any = None
+
+
+def build_acp_server_config(
+    allowed_tools: Optional[list[str] | tuple[str, ...] | set[str]] = None,
+) -> list[dict[str, Any]]:
+    """Build the stdio MCP entry used by an external ACP provider.
+
+    The provider receives only the Hermes tools already granted to the
+    current session.  Keeping that allowlist in the child environment avoids
+    accidentally exposing a broader process-global registry than the parent
+    agent advertised.
+    """
+    try:
+        from mcp.server.fastmcp import FastMCP  # noqa: F401
+    except ImportError:
+        return []
+
+    requested = set(allowed_tools) if allowed_tools is not None else set(EXPOSED_TOOLS)
+    selected = sorted(requested.intersection(EXPOSED_TOOLS))
+    if not selected:
+        return []
+
+    from hermes_constants import get_hermes_home
+
+    source_root = str(Path(__file__).resolve().parents[2])
+    python_path = os.environ.get("PYTHONPATH", "")
+    if source_root not in python_path.split(os.pathsep):
+        python_path = os.pathsep.join(part for part in (source_root, python_path) if part)
+
+    return [{
+        "name": ACP_SERVER_NAME,
+        "command": str(Path(sys.executable).resolve()),
+        "args": ["-m", "agent.transports.hermes_tools_mcp_server"],
+        "env": [
+            {"name": "HERMES_HOME", "value": str(get_hermes_home())},
+            {"name": "HERMES_QUIET", "value": "1"},
+            {"name": "HERMES_REDACT_SECRETS", "value": "true"},
+            {"name": "PYTHONPATH", "value": python_path},
+            {"name": _ACP_ALLOWED_TOOLS_ENV, "value": json.dumps(selected)},
+        ],
+    }]
+
+
+def _allowed_tools_from_env() -> set[str]:
+    raw = os.environ.get(_ACP_ALLOWED_TOOLS_ENV, "").strip()
+    if not raw:
+        return set(EXPOSED_TOOLS)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return set()
+    if not isinstance(value, list):
+        return set()
+    return {str(name) for name in value}.intersection(EXPOSED_TOOLS)
+
+
+def _dispatch_stateless_tool(tool_name: str, kwargs: dict[str, Any]) -> Optional[str]:
+    """Dispatch the ACP-safe tools that normally use AIAgent-owned state."""
+    global _todo_store
+
+    if tool_name == "session_search":
+        from tools.session_search_tool import session_search
+
+        return session_search(**kwargs)
+
+    if tool_name == "todo":
+        from tools.todo_tool import TodoStore, todo_tool
+
+        if _todo_store is None:
+            _todo_store = TodoStore()
+        return todo_tool(
+            todos=kwargs.get("todos"),
+            merge=kwargs.get("merge", False),
+            store=_todo_store,
+        )
+
+    return None
 
 
 def _build_server() -> Any:
@@ -143,7 +223,10 @@ def _build_server() -> Any:
 
     exposed_count = 0
 
+    allowed_tools = _allowed_tools_from_env()
     for name in EXPOSED_TOOLS:
+        if name not in allowed_tools:
+            continue
         spec = all_defs.get(name)
         if spec is None:
             logger.debug(
@@ -162,6 +245,9 @@ def _build_server() -> Any:
         def _make_handler(tool_name: str):
             def _dispatch(**kwargs: Any) -> str:
                 try:
+                    stateless_result = _dispatch_stateless_tool(tool_name, kwargs)
+                    if stateless_result is not None:
+                        return stateless_result
                     return handle_function_call(tool_name, kwargs or {})
                 except Exception as exc:
                     logger.exception("tool %s raised", tool_name)
