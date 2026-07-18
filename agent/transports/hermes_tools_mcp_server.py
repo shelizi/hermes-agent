@@ -52,6 +52,49 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# JSON Schema type -> Python type mapping for signature generation
+_JSON_TO_PY = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
+
+
+def _signature_from_schema(schema: dict | None) -> tuple[inspect.Signature, dict[str, type]]:
+    """Build a Python function signature and annotations from a JSON schema.
+
+    Args:
+        schema: JSON Schema dict with "properties" and "required" keys.
+
+    Returns:
+        (signature, annotations_dict) where signature has KEYWORD_ONLY params
+        and annotations maps param names to Python types.
+    """
+    props = (schema or {}).get("properties") or {}
+    required = set((schema or {}).get("required") or [])
+    params, annots = [], {}
+
+    for pname, pspec in props.items():
+        if pname.startswith("_"):
+            continue
+        py = _JSON_TO_PY.get((pspec or {}).get("type"), Any)
+        ann, default = (
+            (py, inspect.Parameter.empty)
+            if pname in required
+            else (Optional[py], None)
+        )
+        annots[pname] = ann
+        params.append(
+            inspect.Parameter(
+                pname, inspect.Parameter.KEYWORD_ONLY, annotation=ann, default=default
+            )
+        )
+
+    return inspect.Signature(params, return_annotation=str), annots
+
 
 # Tools we expose. Each name MUST match a registered Hermes tool that
 # `model_tools.handle_function_call()` can dispatch.
@@ -107,42 +150,6 @@ EXPOSED_TOOLS: tuple[str, ...] = (
 ACP_SERVER_NAME = "hermes-tools"
 _ACP_ALLOWED_TOOLS_ENV = "HERMES_ACP_MCP_TOOLS"
 _todo_store: Any = None
-
-
-def _handler_signature(parameters: dict[str, Any]) -> inspect.Signature:
-    """Build a callable signature from an OpenAI JSON-schema object.
-
-    FastMCP derives a tool's input model from the Python callable.  A generic
-    ``def handler(**kwargs)`` therefore becomes a schema requiring a literal
-    ``kwargs`` object, which is incompatible with the Hermes tool schema.  A
-    synthetic keyword-only signature keeps FastMCP's validation layer while
-    preserving the real argument names and required/optional split.
-    """
-    properties = parameters.get("properties") or {}
-    required = set(parameters.get("required") or [])
-    if not isinstance(properties, dict):
-        properties = {}
-
-    signature_parameters: list[inspect.Parameter] = []
-    for name, spec in properties.items():
-        if not isinstance(name, str) or not name.isidentifier() or name == "self":
-            # Hermes tool schemas use ordinary identifier names.  Ignore an
-            # unexpected property rather than constructing an invalid Python
-            # signature and taking down the whole ACP bridge.
-            continue
-        if not isinstance(spec, dict):
-            spec = {}
-        default = inspect.Parameter.empty if name in required else spec.get("default", None)
-        signature_parameters.append(
-            inspect.Parameter(
-                name,
-                inspect.Parameter.KEYWORD_ONLY,
-                default=default,
-                annotation=Any,
-            )
-        )
-
-    return inspect.Signature(signature_parameters)
 
 
 def _apply_tool_schema(server: Any, name: str, parameters: dict[str, Any]) -> None:
@@ -293,7 +300,9 @@ def _build_server() -> Any:
         # the result string. We use add_tool() for full control over the
         # input schema (FastMCP's @tool() decorator inspects type hints,
         # which we can't get from a JSON schema at runtime).
-        def _make_handler(tool_name: str):
+        def _make_handler(tool_name: str, schema: dict | None):
+            sig, annots = _signature_from_schema(schema)
+
             def _dispatch(**kwargs: Any) -> str:
                 try:
                     stateless_result = _dispatch_stateless_tool(tool_name, kwargs)
@@ -303,17 +312,25 @@ def _build_server() -> Any:
                 except Exception as exc:
                     logger.exception("tool %s raised", tool_name)
                     return json.dumps({"error": str(exc), "tool": tool_name})
+
             _dispatch.__name__ = tool_name
             _dispatch.__doc__ = description
-            _dispatch.__signature__ = _handler_signature(params_schema)
+            _dispatch.__signature__ = sig
+            _dispatch.__annotations__ = {**annots, "return": str}
             return _dispatch
 
-        mcp.add_tool(
-            _make_handler(name),
-            name=name,
-            description=description,
-            structured_output=False,
-        )
+        try:
+            mcp.add_tool(
+                _make_handler(name, params_schema),
+                name=name,
+                description=description,
+            )
+        except TypeError:
+            # Older mcp SDK signature — fall back to decorator-style. The
+            # synthesized __signature__ on the handler still drives schema
+            # generation there.
+            handler = _make_handler(name, params_schema)
+            handler = mcp.tool(name=name, description=description)(handler)
         _apply_tool_schema(mcp, name, params_schema)
 
         exposed_count += 1
