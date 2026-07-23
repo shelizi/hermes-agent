@@ -429,6 +429,22 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         # Hermes placeholder when no specific model is chosen
         "devin-acp",
     ],
+    # Snapshot of `grok models` "Available models:" list (offline fallback).
+    # Live discovery via fetch_grok_cli_models() preferred when the Grok CLI is
+    # installed and authenticated.
+    "grok-acp": [
+        "grok-4.5",
+        "grok-composer-2.5-fast",
+        "grok-build-0.1",
+        "grok-4.3",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-multi-agent-0309",
+        "grok-3-mini",
+        "grok-3-mini-fast",
+        # Hermes placeholder when no specific model is chosen
+        "grok-acp",
+    ],
     "deepseek": [
         "deepseek-v4-pro",
         "deepseek-v4-flash",
@@ -1125,6 +1141,7 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("copilot",        "GitHub Copilot",           "GitHub Copilot (Uses GITHUB_TOKEN or gh auth token)"),
     ProviderEntry("copilot-acp",    "GitHub Copilot ACP",       "GitHub Copilot ACP (Spawns copilot --acp --stdio)"),
     ProviderEntry("devin-acp",      "Devin CLI ACP",            "Devin CLI ACP (Spawns devin acp)"),
+    ProviderEntry("grok-acp",       "Grok CLI ACP",             "Grok CLI ACP (Spawns grok --no-auto-update agent stdio)"),
     ProviderEntry("huggingface",    "Hugging Face",             "Hugging Face Inference Providers"),
     ProviderEntry("gemini",         "Google AI Studio",         "Google AI Studio (Native Gemini API)"),
     ProviderEntry("vertex",         "Google Vertex AI",         "Google Vertex AI (Gemini via GCP; OAuth2 service account or ADC, GCP billing/quotas)"),
@@ -1290,6 +1307,9 @@ _PROVIDER_ALIASES = {
     "devin": "devin-acp",
     "devin-cli": "devin-acp",
     "cognition-devin": "devin-acp",
+    "grok-cli": "grok-acp",
+    "grok-build": "grok-acp",
+    "xai-grok-cli": "grok-acp",
     "google": "gemini",
     "google-gemini": "gemini",
     "google-ai-studio": "gemini",
@@ -2702,6 +2722,105 @@ def fetch_devin_cli_models(
     return models
 
 
+def parse_grok_cli_available_models(text: str) -> list[str]:
+    """Parse the ``Available models:`` list emitted by ``grok models``.
+
+    Handles lines like::
+
+          * grok-4.5 (default)
+          - grok-composer-2.5-fast
+
+    Returns the model ids in the order they appear (default first).
+    """
+    if not text:
+        return []
+    marker = "Available models:"
+    idx = text.find(marker)
+    if idx == -1:
+        return []
+    block = text[idx + len(marker) :].split("\n\n", 1)[0]
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in block.splitlines():
+        m = re.match(r"^\s*[-*]\s+([^\s(]+)", line)
+        if not m:
+            continue
+        model_id = m.group(1).strip()
+        if not model_id:
+            continue
+        key = model_id.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(model_id)
+    return out
+
+
+def fetch_grok_cli_models(
+    *,
+    command: Optional[str] = None,
+    timeout: float = 12.0,
+) -> list[str]:
+    """Discover Grok CLI models by running ``grok models``.
+
+    Returns [] when the CLI is missing, times out, or does not emit an
+    Available line. Never raises for expected probe failures.
+    """
+    import shutil
+    import subprocess
+
+    cmd = (command or "").strip()
+    resolved = None
+    if cmd:
+        resolved = shutil.which(cmd) if os.sep not in cmd and "/" not in cmd else cmd
+    if not cmd:
+        try:
+            from hermes_cli.auth import (
+                _resolve_external_process_command_args,
+                _resolve_external_process_command_path,
+            )
+
+            cmd, _args = _resolve_external_process_command_args("grok-acp")
+            resolved = _resolve_external_process_command_path("grok-acp", cmd)
+        except Exception:
+            cmd = (
+                os.getenv("HERMES_GROK_ACP_COMMAND", "").strip()
+                or os.getenv("GROK_CLI_PATH", "").strip()
+                or "grok"
+            )
+    if not resolved and cmd:
+        try:
+            from hermes_cli.auth import _resolve_external_process_command_path
+
+            resolved = _resolve_external_process_command_path("grok-acp", cmd)
+        except Exception:
+            pass
+    if not resolved:
+        resolved = shutil.which(cmd) if cmd else None
+    if not resolved:
+        resolved = cmd if cmd else None
+    if not resolved:
+        return []
+
+    try:
+        proc = subprocess.run(
+            [resolved, "models"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return []
+    except Exception:
+        return []
+
+    blob = "\n".join(
+        part for part in (proc.stderr or "", proc.stdout or "") if part
+    )
+    return parse_grok_cli_available_models(blob)
+
+
 def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) -> list[str]:
     """Return the best known model catalog for a provider.
 
@@ -2749,6 +2868,14 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
         except Exception:
             pass
         return list(_PROVIDER_MODELS.get("devin-acp", ["devin-acp"]))
+    if normalized == "grok-acp":
+        try:
+            live = fetch_grok_cli_models()
+            if live:
+                return live
+        except Exception:
+            pass
+        return list(_PROVIDER_MODELS.get("grok-acp", ["grok-acp"]))
     if normalized == "nous":
         # Try live Nous Portal /models endpoint
         try:
@@ -3065,6 +3192,22 @@ def _credential_fingerprint(provider: str) -> str:
         for path in devin_paths:
             if not path:
                 continue
+            try:
+                mt = _os.stat(path).st_mtime_ns
+                parts.append(f"{path}@{mt}")
+            except FileNotFoundError:
+                parts.append(f"{path}@missing")
+            except Exception:
+                pass
+
+    # Grok Build CLI: auth.json + config.toml mtimes bust the model cache.
+    if provider in {"grok-acp", "grok-cli", "grok-build", "xai-grok-cli"}:
+        home = _os.path.expanduser("~")
+        grok_paths = [
+            _os.path.join(home, ".grok", "auth.json"),
+            _os.path.join(home, ".grok", "config.toml"),
+        ]
+        for path in grok_paths:
             try:
                 mt = _os.stat(path).st_mtime_ns
                 parts.append(f"{path}@{mt}")

@@ -662,9 +662,9 @@ def classify_api_error(
             should_fallback=True,
         )
 
-    # Local ACP subprocess backends (copilot-acp / devin-acp): permanent
-    # setup/config failures must not burn api_max_retries (each attempt
-    # re-spawns a CLI). Match narrow install/argv/pipe messages only.
+    # Local ACP subprocess backends (copilot-acp / devin-acp / grok-acp):
+    # permanent setup/config failures must not burn api_max_retries (each
+    # attempt re-spawns a CLI). Match narrow install/argv/pipe messages only.
     if (
         "could not start" in error_msg
         and "acp" in error_msg

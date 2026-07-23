@@ -2091,9 +2091,10 @@ def list_authenticated_providers(
                     has_creds = True
             except Exception as exc:
                 logger.debug("Anthropic external creds check failed: %s", exc)
-        # Local ACP CLIs (copilot-acp / devin-acp): no API key env var — use
-        # the shared external-process status probe (PATH + optional local
-        # credentials file) so Desktop/Accounts + model picker can surface them.
+        # Local ACP CLIs (copilot-acp / devin-acp / grok-acp): no API key env
+        # var — use the shared external-process status probe (PATH + optional
+        # local credentials file) so Desktop/Accounts + model picker can
+        # surface them.
         if not has_creds and overlay.auth_type == "external_process":
             try:
                 from hermes_cli.auth import get_external_process_provider_status
@@ -2109,7 +2110,13 @@ def list_authenticated_providers(
         if not has_creds:
             continue
 
-        if hermes_slug in {"openai-codex", "copilot", "copilot-acp", "devin-acp"}:
+        if hermes_slug in {
+            "openai-codex",
+            "copilot",
+            "copilot-acp",
+            "devin-acp",
+            "grok-acp",
+        }:
             # Use live discovery so the gateway /model picker matches what
             # the authenticated backend serves. Copilot/Codex hit OAuth
             # /models; Devin CLI has no REST catalog but exposes an

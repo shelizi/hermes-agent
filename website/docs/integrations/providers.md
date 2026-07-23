@@ -240,6 +240,33 @@ Hermes reuses the local `devin acp` process across multi-turn chat, continues th
 
 On Windows, install Devin CLI via PowerShell (`irm https://static.devin.ai/cli/setup.ps1 | iex`), then restart the terminal so `devin` is on `PATH`.
 
+**`grok-acp` — Grok Build CLI ACP backend**. Spawns the local Grok Build CLI as a subprocess (`grok --no-auto-update agent stdio`):
+
+```bash
+hermes chat --provider grok-acp --model grok-4.5
+# Requires the Grok CLI in PATH (or ~/.grok/bin) and `grok login` / XAI_API_KEY
+```
+
+**Permanent config:**
+```yaml
+model:
+  provider: "grok-acp"
+  default: "grok-4.5"
+```
+
+| Environment variable | Description |
+|---------------------|-------------|
+| `HERMES_GROK_ACP_COMMAND` / `GROK_CLI_PATH` | Override the Grok CLI binary path (default: `grok`, also looks under `~/.grok/bin/`) |
+| `HERMES_GROK_ACP_ARGS` | Override ACP args (default: `--no-auto-update agent stdio`) |
+| `GROK_ACP_BASE_URL` | Override marker URL (default: `acp://grok`) |
+| `XAI_API_KEY` | Optional ambient API key used by Grok ACP `authenticate` (`xai.api_key`) when present |
+| `HERMES_ACP_PROCESS_REUSE` | Keep the ACP CLI process warm across turns (default on; set `0` to disable) |
+| `HERMES_ACP_SESSION_REUSE` | Continue the same ACP session when history extends (default on with process reuse) |
+
+Hermes reuses the local `grok agent stdio` process, authenticates via ACP (`cached_token` or `xai.api_key` per [xAI headless docs](https://docs.x.ai/build/cli/headless-scripting)), and binds models with `session/set_model` after `session/new`. Live model discovery uses `grok models`.
+
+**Desktop / dashboard:** When the CLI is installed and local credentials are detected (`~/.grok/auth.json` or `XAI_API_KEY`), Model Picker can list `grok-acp`. Authenticate with `grok login` in a terminal.
+
 ### First-Class API-Key Providers
 
 These providers have built-in support with dedicated provider IDs. Set the API key and use `--provider` to select:
@@ -1521,7 +1548,7 @@ fallback_model:
 
 When activated, the fallback swaps the model and provider mid-session without losing your conversation. The chain is tried entry-by-entry; activation is one-shot per session.
 
-Supported providers: `openrouter`, `nous`, `novita`, `openai-codex`, `copilot`, `copilot-acp`, `devin-acp`, `anthropic`, `gemini`, `qwen-oauth`, `huggingface`, `zai`, `kimi-coding`, `kimi-coding-cn`, `minimax`, `minimax-cn`, `minimax-oauth`, `deepseek`, `nvidia`, `xai`, `xai-oauth`, `ollama-cloud`, `bedrock`, `azure-foundry`, `opencode-zen`, `opencode-go`, `kilocode`, `xiaomi`, `arcee`, `gmi`, `stepfun`, `lmstudio`, `alibaba`, `alibaba-coding-plan`, `tencent-tokenhub`, `custom`.
+Supported providers: `openrouter`, `nous`, `novita`, `openai-codex`, `copilot`, `copilot-acp`, `devin-acp`, `grok-acp`, `anthropic`, `gemini`, `qwen-oauth`, `huggingface`, `zai`, `kimi-coding`, `kimi-coding-cn`, `minimax`, `minimax-cn`, `minimax-oauth`, `deepseek`, `nvidia`, `xai`, `xai-oauth`, `ollama-cloud`, `bedrock`, `azure-foundry`, `opencode-zen`, `opencode-go`, `kilocode`, `xiaomi`, `arcee`, `gmi`, `stepfun`, `lmstudio`, `alibaba`, `alibaba-coding-plan`, `tencent-tokenhub`, `custom`.
 
 :::tip
 Fallback is configured exclusively through `config.yaml` — or interactively via `hermes fallback`. For full details on when it triggers, how the chain advances, and how it interacts with auxiliary tasks and delegation, see [Fallback Providers](/user-guide/features/fallback-providers).

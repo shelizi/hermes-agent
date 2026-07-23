@@ -33,6 +33,10 @@ Hermes reads environment variables from the process environment and, for user-ma
 | `DEVIN_CLI_PATH` | Alias for `HERMES_DEVIN_ACP_COMMAND` |
 | `HERMES_DEVIN_ACP_ARGS` | Override Devin ACP arguments (default: `acp`) |
 | `DEVIN_ACP_BASE_URL` | Override Devin ACP marker URL (default: `acp://devin`) |
+| `HERMES_GROK_ACP_COMMAND` | Override Grok Build ACP CLI binary path (default: `grok`) |
+| `GROK_CLI_PATH` | Alias for `HERMES_GROK_ACP_COMMAND` |
+| `HERMES_GROK_ACP_ARGS` | Override Grok ACP arguments (default: `--no-auto-update agent stdio`) |
+| `GROK_ACP_BASE_URL` | Override Grok ACP marker URL (default: `acp://grok`) |
 | `HERMES_ACP_PROCESS_REUSE` | Keep the ACP subprocess warm across turns (`1`/`true` default; set `0` to spawn per request) |
 | `HERMES_ACP_SESSION_REUSE` | Continue the same ACP `sessionId` when history grows (`1` default when process reuse is on; set `0` for `session/new` every prompt) |
 | `COPILOT_ACP_BASE_URL` | Override Copilot ACP base URL |
