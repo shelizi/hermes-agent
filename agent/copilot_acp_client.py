@@ -994,6 +994,8 @@ class CopilotACPClient:
             # (and occasionally raw bytes), so text=True alone raises
             # UnicodeDecodeError in the stderr reader and can leave the
             # transport half-dead while the UI shows no tokens.
+            # Hide the console the CLI child would otherwise flash on Windows
+            # (#56747). Hide-only — stdio pipes stay intact for the ACP wire.
             proc = subprocess.Popen(
                 self._spawn_argv(),
                 stdin=subprocess.PIPE,
@@ -1004,6 +1006,7 @@ class CopilotACPClient:
                 errors="replace",
                 bufsize=1,
                 cwd=self._acp_cwd,
+                # Subclasses (Devin) override _subprocess_env for model binding.
                 env=self._subprocess_env(),
                 creationflags=windows_hide_flags(),
             )
