@@ -194,6 +194,44 @@ class TestSessionLifecycle:
         child = db.get_session("child")
         assert child["git_branch"] == "feature-x"
 
+    def test_child_session_inherits_profile_name_from_parent(self, db):
+        """A parented child born without profile_name (compression rotation,
+        /branch) must inherit its parent's owning profile — otherwise the
+        lineage silently migrates to the launch/default profile in unified
+        session lists (the cross-profile session-jump bug)."""
+        db.create_session(session_id="parent", source="cli", profile_name="ai-engineer")
+        # Rotation path: parent is ended with 'compression' BEFORE the child
+        # row is created (agent/conversation_compression.py).
+        db.end_session("parent", "compression")
+
+        db.create_session(session_id="child", source="cli", parent_session_id="parent")
+
+        assert db.get_session("child")["profile_name"] == "ai-engineer"
+
+    def test_child_session_explicit_profile_name_is_not_overwritten(self, db):
+        """Inheritance only fills NULLs — an explicit profile_name on the
+        child is never clobbered by the parent's."""
+        db.create_session(session_id="parent", source="cli", profile_name="ai-engineer")
+
+        db.create_session(
+            session_id="child", source="cli", parent_session_id="parent",
+            profile_name="other",
+        )
+
+        assert db.get_session("child")["profile_name"] == "other"
+
+    def test_multi_generation_lineage_inherits_profile_name(self, db):
+        """profile_name survives a compress-then-branch chain (root -> rotation
+        child -> branch tip) — the exact lineage that used to land on default."""
+        db.create_session(session_id="root", source="cli", profile_name="ai-engineer")
+        db.end_session("root", "compression")
+
+        db.create_session(session_id="gen1", source="cli", parent_session_id="root")
+        db.create_session(session_id="gen2", source="cli", parent_session_id="gen1")
+
+        assert db.get_session("gen1")["profile_name"] == "ai-engineer"
+        assert db.get_session("gen2")["profile_name"] == "ai-engineer"
+
     def test_compression_child_inherits_gateway_origin_columns(self, db):
         """A compression fork's child inherits gateway routing metadata
         (session_key/chat_id/...) from the ended parent, so a crash before
@@ -7186,4 +7224,52 @@ class TestLoneSurrogatePersistence:
         db.create_session("s1", source="cli")
         assert db.set_session_title("s1", "title \ud835 bad") is True
         assert db.get_session("s1")["title"] == "title \ufffd bad"
+
+
+class TestDisplayMetadataPersistence:
+    """Round-trip display_kind/display_metadata through every write path."""
+
+    def test_append_message_round_trips_display_fields(self, db):
+        db.create_session("s1", source="cli")
+        meta = {"task_count": 2, "delegation_id": "del-1"}
+        db.append_message(
+            "s1", "user", "event text",
+            display_kind="async_delegation_complete",
+            display_metadata=meta,
+        )
+        conv = db.get_messages_as_conversation("s1")
+        assert conv[0]["display_kind"] == "async_delegation_complete"
+        assert conv[0]["display_metadata"] == meta
+
+    def test_replace_messages_preserves_display_metadata(self, db):
+        db.create_session("s1", source="cli")
+        meta = {"task_count": 3, "delegation_id": "del-2", "duration_seconds": 12.5}
+        db.append_message(
+            "s1", "user", "event",
+            display_kind="async_delegation_complete",
+            display_metadata=meta,
+        )
+        # Reload via get_messages_as_conversation (which decodes display fields)
+        # then replace_messages (which re-inserts via _insert_message_rows).
+        conv = db.get_messages_as_conversation("s1")
+        db.replace_messages("s1", conv)
+        reloaded = db.get_messages_as_conversation("s1")
+        assert reloaded[0]["display_kind"] == "async_delegation_complete"
+        assert reloaded[0]["display_metadata"] == meta
+
+    def test_archive_and_compact_preserves_display_metadata(self, db):
+        db.create_session("s1", source="cli")
+        meta = {"model": "test-model", "provider": "test-provider"}
+        db.append_message(
+            "s1", "user", "switch event",
+            display_kind="model_switch",
+            display_metadata=meta,
+        )
+        db.append_message("s1", "assistant", "reply")
+        conv = db.get_messages_as_conversation("s1")
+        db.archive_and_compact("s1", conv)
+        reloaded = db.get_messages_as_conversation("s1")
+        switched = [m for m in reloaded if m.get("display_kind") == "model_switch"]
+        assert len(switched) == 1
+        assert switched[0]["display_metadata"] == meta
 
