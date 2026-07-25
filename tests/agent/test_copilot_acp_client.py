@@ -6,18 +6,23 @@ import base64
 import io
 import json
 import os
+import queue
 import tempfile
 import unittest
+from collections import deque
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from agent.copilot_acp_client import CopilotACPClient
+from agent.copilot_acp_client import CopilotACPClient, _acp_rpc_error_message
 
 
 class _FakeProcess:
     def __init__(self) -> None:
         self.stdin = io.StringIO()
+
+    def poll(self) -> None:
+        return None
 
 
 class CopilotACPClientSafetyTests(unittest.TestCase):
@@ -78,6 +83,61 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
         self.assertEqual(chunks[0].choices[0].finish_reason, "stop")
         self.assertEqual(chunks[1].choices, [])
         self.assertEqual(chunks[1].usage.total_tokens, 0)
+
+    def test_acp_rpc_error_prefers_nested_provider_detail(self) -> None:
+        message = _acp_rpc_error_message(
+            {
+                "message": "Internal error",
+                "data": {
+                    "message": (
+                        "API error (status 402 Payment Required): "
+                        "Grok Build usage balance exhausted"
+                    ),
+                    "http_status": 402,
+                },
+            }
+        )
+
+        self.assertIn("Grok Build usage balance exhausted", message)
+        self.assertNotEqual(message, "Internal error")
+
+    def test_acp_rpc_error_redacts_nested_provider_detail(self) -> None:
+        message = _acp_rpc_error_message(
+            {
+                "message": "Internal error",
+                "data": {
+                    "message": (
+                        "API error: Authorization: Bearer "
+                        "sk-ABCDEF0123456789abcdef0123"
+                    )
+                },
+            }
+        )
+
+        self.assertNotIn("sk-ABCDEF0123456789abcdef0123", message)
+
+    def test_rpc_error_includes_nested_provider_detail(self) -> None:
+        process = _FakeProcess()
+        self.client._active_process = process
+        self.client._inbox = queue.Queue()
+        self.client._stderr_tail = deque()
+        self.client._inbox.put(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32603,
+                    "message": "Internal error",
+                    "data": {
+                        "message": "Grok Build usage balance exhausted",
+                        "http_status": 402,
+                    },
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Grok Build usage balance exhausted"):
+            self.client._rpc("session/prompt", {}, timeout_seconds=1)
 
     def test_stream_true_preserves_tool_call_deltas(self) -> None:
         tool_response = (

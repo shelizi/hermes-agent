@@ -235,6 +235,17 @@ _GATEWAY_RATE_LIMIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_GATEWAY_BILLING_ERROR_RE = re.compile(
+    r"(payment\s+required|"
+    r"(?:usage\s+)?balance\s+(?:is\s+)?(?:exhausted|depleted)|"
+    r"credits?\s+(?:are\s+)?(?:exhausted|depleted)|"
+    r"insufficient\s+(?:credits?|balance|quota)|"
+    r"no\s+usable\s+credits|"
+    r"out\s+of\s+(?:credits|funds)|"
+    r"\b402\b)",
+    re.IGNORECASE,
+)
+
 _GATEWAY_SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{12,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
@@ -473,6 +484,16 @@ def _format_exec_approval_fallback(
 
 def _gateway_provider_error_reply(text: str) -> str:
     """Map raw provider/API errors to a short user-safe Telegram reply."""
+    if _GATEWAY_BILLING_ERROR_RE.search(text):
+        if re.search(r"grok\s+build", text, re.IGNORECASE):
+            return (
+                "💳 Grok Build usage balance is exhausted. Add Grok Build credits "
+                "or switch providers, then try again."
+            )
+        return (
+            "💳 The provider account has exhausted its usage balance or credits. "
+            "Top up the provider account or switch providers, then try again."
+        )
     if _GATEWAY_AUTH_ERROR_RE.search(text):
         return (
             "⚠️ Provider authentication failed. Check the configured credentials; "
@@ -494,6 +515,7 @@ def _gateway_provider_error_reply(text: str) -> str:
 _GATEWAY_PROVIDER_ERROR_SHAPE_RE = re.compile(
     r"^\s*(\W*\s*)?("
     r"api\s+(?:call\s+)?failed"
+    r"|billing\s+or\s+credits\s+exhausted"
     r"|provider\s+authentication\s+failed"
     r"|non-retryable\s+error"
     r"|rate\s+limited\s+after\s+\d+\s+retries"
@@ -522,6 +544,15 @@ def _looks_like_gateway_provider_error(text: str) -> bool:
     if not text:
         return False
     body = str(text).strip()
+    # Billing failures may include provider-specific guidance and links after
+    # the standard prefix, so classify this explicit envelope before applying
+    # the short-message length guard below.
+    if re.match(
+        r"^\s*(\W*\s*)?billing\s+or\s+credits\s+exhausted\b",
+        body,
+        re.IGNORECASE,
+    ):
+        return True
     # Provider failure envelopes are short. Assistant answers that happen
     # to mention HTTP status codes ("HTTP 404 means...") tend to be longer.
     if len(body) > 400 or body.count("\n") > 4:

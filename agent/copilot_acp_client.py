@@ -110,6 +110,36 @@ def _is_gh_copilot_deprecation_message(stderr_text: str) -> bool:
     return any(marker in lower for marker in _DEPRECATION_MARKERS)
 
 
+def _acp_rpc_error_message(error: Any) -> str:
+    """Extract a safe, actionable message from an ACP JSON-RPC error.
+
+    ACP agents commonly wrap the upstream provider failure in
+    ``error.data.message`` while leaving ``error.message`` as the generic
+    ``Internal error``.  Prefer that nested detail, but redact it before it
+    can reach logs or a user-facing response.
+    """
+    if isinstance(error, dict):
+        outer_message = str(error.get("message") or "").strip()
+        data = error.get("data")
+        detail = ""
+        status = None
+        if isinstance(data, dict):
+            detail = str(data.get("message") or "").strip()
+            status = data.get("http_status") or data.get("status") or data.get("status_code")
+        elif isinstance(data, str):
+            detail = data.strip()
+
+        if detail:
+            status_text = str(status or "").strip()
+            if status_text and status_text not in detail:
+                detail = f"HTTP {status_text}: {detail}"
+            return redact_sensitive_text(detail, force=True)
+        if outer_message:
+            return redact_sensitive_text(outer_message, force=True)
+
+    return redact_sensitive_text(str(error), force=True)
+
+
 def _resolve_command() -> str:
     return (
         os.getenv("HERMES_COPILOT_ACP_COMMAND", "").strip()
@@ -1533,7 +1563,7 @@ class CopilotACPClient:
             if "error" in msg:
                 err = msg.get("error") or {}
                 raise RuntimeError(
-                    f"{label} {method} failed: {err.get('message') or err}"
+                    f"{label} {method} failed: {_acp_rpc_error_message(err)}"
                 )
             return msg.get("result")
 

@@ -207,6 +207,35 @@ def test_chat_gateways_redact_secret_in_provider_error(platform):
     assert "provider" in sanitized.lower()
 
 
+@pytest.mark.parametrize("platform", CHAT_PLATFORMS)
+def test_chat_gateways_explain_provider_balance_exhaustion(platform):
+    raw = (
+        "Billing or credits exhausted: API call failed after 3 retries: "
+        "Grok ACP session/prompt failed: API error (status 402 Payment Required): "
+        "Grok Build usage balance exhausted"
+    )
+
+    sanitized = _sanitize_gateway_final_response(platform, raw)
+
+    assert "Grok Build usage balance is exhausted" in sanitized
+    assert "raw provider" not in sanitized.lower()
+
+
+@pytest.mark.parametrize("platform", CHAT_PLATFORMS)
+def test_chat_gateways_keep_billing_category_with_long_guidance(platform):
+    raw = (
+        "Billing or credits exhausted: API call failed after 3 retries: "
+        "Grok ACP session/prompt failed: API error (status 402 Payment Required): "
+        "Grok Build usage balance exhausted\n\n"
+        + ("Additional billing guidance. " * 30)
+    )
+
+    sanitized = _sanitize_gateway_final_response(platform, raw)
+
+    assert "Grok Build usage balance is exhausted" in sanitized
+    assert "Additional billing guidance" not in sanitized
+
+
 @pytest.mark.parametrize("platform", ["whatsapp", "slack", "signal", "matrix"])
 def test_chat_gateways_redact_secret_in_non_error_body(platform):
     """Secrets must be redacted even when no provider-error rewrite fires.
