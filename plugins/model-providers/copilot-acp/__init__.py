@@ -30,6 +30,9 @@ copilot_acp = CopilotACPProfile(
     env_vars=(),  # Managed by ACP subprocess
     base_url="acp://copilot",  # ACP internal scheme
     auth_type="external_process",
+    # Native image_url parts are re-encoded as ACP content blocks when the
+    # Copilot agent advertises promptCapabilities.image.
+    supports_vision=True,
 )
 
 register_provider(copilot_acp)

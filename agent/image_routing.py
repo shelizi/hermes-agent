@@ -427,6 +427,20 @@ def _lookup_supports_vision(
     )
     if override is not None:
         return override
+    # ACP subprocess backends re-encode OpenAI image_url parts as ACP
+    # ContentBlocks (type=image / resource_link) when the child advertises
+    # promptCapabilities.image. Treat them as vision-capable so Hermes keeps
+    # native multimodal parts instead of pre-describing via vision_analyze.
+    # Do NOT use ProviderProfile.supports_vision here — that flag is
+    # provider-wide and can be True for multi-model providers that also
+    # ship text-only models (e.g. Xiaomi).
+    try:
+        from agent.acp_client_factory import is_acp_provider
+
+        if is_acp_provider(provider):
+            return True
+    except Exception:
+        pass
     if not provider or not model:
         return None
     caps = None

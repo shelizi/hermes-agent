@@ -267,6 +267,8 @@ Hermes reuses the local `grok agent stdio` process, authenticates via ACP (`cach
 
 Like Devin ACP, Grok ACP attaches Hermes **MCP bridges** at `session/new` (`hermes-memory` + `hermes-tools`) so the Grok Build agent can call Hermes tools natively instead of textual XML tool blocks.
 
+**Images / attachments:** When the ACP agent advertises `promptCapabilities.image` on `initialize`, Hermes forwards user-attached images as ACP [`image` content blocks](https://agentclientprotocol.com/protocol/v1/content) on `session/prompt` (base64 + mimeType). File attachments that have a local path or URL are sent as baseline `resource_link` blocks. If the agent does not advertise image support, Hermes keeps a text placeholder and skips the image payload (set `agent.image_input_mode: text` to force the vision_analyze pre-description path instead).
+
 **Desktop / dashboard:** When the CLI is installed and local credentials are detected (`~/.grok/auth.json` or `XAI_API_KEY`), Model Picker can list `grok-acp`. Authenticate with `grok login` in a terminal.
 
 ### First-Class API-Key Providers

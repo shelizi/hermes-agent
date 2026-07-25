@@ -17,7 +17,10 @@ Disable with env:
 
 from __future__ import annotations
 
+import base64
 import json
+import logging
+import mimetypes
 import os
 import queue
 import re
@@ -29,6 +32,8 @@ from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import unquote, urlparse
+from urllib.request import pathname2url
 
 from openai.types.chat.chat_completion_message_tool_call import (
     ChatCompletionMessageToolCall,
@@ -40,9 +45,20 @@ from agent.redact import redact_sensitive_text
 from hermes_cli._subprocess_compat import windows_hide_flags
 from tools.environments.local import hermes_subprocess_env
 
+logger = logging.getLogger(__name__)
+
 ACP_MARKER_BASE_URL = "acp://copilot"
 _DEFAULT_TIMEOUT_SECONDS = 900.0
 _REUSE_DISABLE_VALUES = frozenset({"0", "false", "no", "off"})
+
+# Outbound image payload cap (decoded bytes). Keeps a single session/prompt
+# from shipping multi-hundred-MB base64 blobs into an ACP child process.
+_MAX_ACP_IMAGE_BYTES = 15 * 1024 * 1024
+
+# OpenAI / Responses-style multimodal part types Hermes uses for images.
+_OPENAI_IMAGE_PART_TYPES = frozenset({"image", "image_url", "input_image"})
+_OPENAI_AUDIO_PART_TYPES = frozenset({"audio", "input_audio"})
+_OPENAI_FILE_PART_TYPES = frozenset({"file", "input_file", "document"})
 
 # A few ACP implementations write the JSON-RPC response before the final
 # session/update notification has made it through their event loop.  The
@@ -422,8 +438,407 @@ def _render_message_content(content: Any) -> str:
                 text = item.get("text")
                 if isinstance(text, str) and text.strip():
                     parts.append(text.strip())
+                    continue
+                # Keep multimodal parts visible in the transcript as compact
+                # placeholders — actual pixels/files travel as ACP content
+                # blocks on session/prompt when the agent advertises support.
+                placeholder = _media_placeholder_for_part(item)
+                if placeholder:
+                    parts.append(placeholder)
         return "\n".join(parts).strip()
     return str(content).strip()
+
+
+def _media_placeholder_for_part(part: dict[str, Any]) -> str:
+    """Return a short transcript placeholder for a multimodal content part."""
+    ptype = str(part.get("type") or "").strip().lower()
+    if ptype in _OPENAI_IMAGE_PART_TYPES:
+        mime = _guess_image_mime_from_part(part) or "image"
+        return f"[Image attached ({mime})]"
+    if ptype in _OPENAI_AUDIO_PART_TYPES:
+        mime = str(part.get("mimeType") or part.get("mime_type") or "audio").strip()
+        return f"[Audio attached ({mime})]"
+    if ptype in _OPENAI_FILE_PART_TYPES:
+        name = (
+            str(part.get("name") or part.get("filename") or "").strip()
+            or str((part.get("file") or {}).get("filename") or "").strip()
+            or "file"
+        )
+        return f"[File attached: {name}]"
+    return ""
+
+
+def _guess_image_mime_from_part(part: dict[str, Any]) -> str | None:
+    for key in ("mimeType", "mime_type", "media_type"):
+        raw = part.get(key)
+        if isinstance(raw, str) and raw.strip().startswith("image/"):
+            return raw.strip().lower()
+    url = _image_url_from_part(part)
+    if url.startswith("data:"):
+        header = url.split(",", 1)[0]
+        mime = header[len("data:") :].split(";", 1)[0].strip().lower()
+        if mime.startswith("image/"):
+            return mime
+    if url:
+        guessed, _ = mimetypes.guess_type(url.split("?", 1)[0])
+        if guessed and guessed.startswith("image/"):
+            return guessed
+    return None
+
+
+def _image_url_from_part(part: dict[str, Any]) -> str:
+    """Pull a URL / data-URL / path string out of an OpenAI-style image part."""
+    ptype = str(part.get("type") or "").strip().lower()
+    if ptype == "image":
+        # Anthropic-ish or already-ACP-shaped
+        data = part.get("data")
+        mime = str(part.get("mimeType") or part.get("mime_type") or "image/png").strip()
+        if isinstance(data, str) and data.strip():
+            if data.startswith("data:"):
+                return data.strip()
+            return f"data:{mime};base64,{data.strip()}"
+        uri = part.get("uri") or part.get("url") or ""
+        return str(uri or "").strip()
+
+    image_value = part.get("image_url", part.get("image", part.get("input_image")))
+    if isinstance(image_value, dict):
+        url = image_value.get("url") or image_value.get("uri") or ""
+        return str(url or "").strip()
+    if isinstance(image_value, str):
+        return image_value.strip()
+    # Bare url field on some shims
+    url = part.get("url") or part.get("uri") or ""
+    return str(url or "").strip()
+
+
+def _path_from_file_uri_or_local(url: str) -> Path | None:
+    """Resolve file:// URIs and bare local paths to an existing Path."""
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("file:"):
+        parsed = urlparse(raw)
+        path_str = unquote(parsed.path or "")
+        # Windows file:///C:/... → path starts with /C:/
+        if os.name == "nt" and path_str.startswith("/") and len(path_str) > 2 and path_str[2] == ":":
+            path_str = path_str[1:]
+        candidate = Path(path_str)
+    else:
+        # data: / http(s): are not local files
+        if "://" in raw:
+            return None
+        candidate = Path(os.path.expanduser(raw))
+    try:
+        if candidate.is_file():
+            return candidate
+    except OSError:
+        return None
+    return None
+
+
+def _openai_image_part_to_acp_block(
+    part: dict[str, Any],
+    *,
+    max_bytes: int = _MAX_ACP_IMAGE_BYTES,
+) -> dict[str, Any] | None:
+    """Convert an OpenAI multimodal image part into an ACP ``image`` ContentBlock.
+
+    Returns None when the payload cannot be materialised as base64 within
+    *max_bytes* (missing data, oversized, unreadable path).
+    """
+    url = _image_url_from_part(part)
+    if not url:
+        return None
+
+    mime = _guess_image_mime_from_part(part) or "image/png"
+    data_b64: str | None = None
+    uri: str | None = None
+
+    if url.startswith("data:"):
+        header, _, payload = url.partition(",")
+        if not payload:
+            return None
+        # Some producers include whitespace/newlines in base64 payloads.
+        data_b64 = "".join(payload.split())
+        mime_part = header[len("data:") :].split(";", 1)[0].strip().lower()
+        if mime_part.startswith("image/"):
+            mime = mime_part
+        try:
+            raw_len = len(base64.b64decode(data_b64, validate=False))
+        except Exception:
+            return None
+        if raw_len > max_bytes:
+            logger.warning(
+                "ACP image data-URL too large (%d bytes > %d); skipping",
+                raw_len,
+                max_bytes,
+            )
+            return None
+        uri = None
+    else:
+        path = _path_from_file_uri_or_local(url)
+        if path is not None:
+            try:
+                size = path.stat().st_size
+                if size > max_bytes:
+                    logger.warning(
+                        "ACP image file too large (%s: %d bytes > %d); skipping",
+                        path,
+                        size,
+                        max_bytes,
+                    )
+                    return None
+                raw = path.read_bytes()
+            except OSError as exc:
+                logger.warning("ACP image file unreadable (%s): %s", path, exc)
+                return None
+            data_b64 = base64.b64encode(raw).decode("ascii")
+            guessed, _ = mimetypes.guess_type(str(path))
+            if guessed and guessed.startswith("image/"):
+                mime = guessed
+            try:
+                uri = path.resolve().as_uri()
+            except Exception:
+                uri = f"file://{pathname2url(str(path.resolve()))}"
+        elif url.startswith(("http://", "https://")):
+            # Protocol requires base64 `data`; remote URLs alone are not enough
+            # without a fetch. Prefer resource_link so the agent can pull them.
+            return None
+        else:
+            return None
+
+    if not data_b64:
+        return None
+
+    block: dict[str, Any] = {
+        "type": "image",
+        "mimeType": mime,
+        "data": data_b64,
+    }
+    if uri:
+        block["uri"] = uri
+    return block
+
+
+def _openai_file_part_to_resource_link(part: dict[str, Any]) -> dict[str, Any] | None:
+    """Map a file/document part onto an ACP ``resource_link`` (always allowed)."""
+    file_obj = part.get("file") if isinstance(part.get("file"), dict) else {}
+    name = (
+        str(part.get("name") or part.get("filename") or "").strip()
+        or str(file_obj.get("filename") or file_obj.get("name") or "").strip()
+        or "attachment"
+    )
+    mime = (
+        str(part.get("mimeType") or part.get("mime_type") or "").strip()
+        or str(file_obj.get("mimeType") or file_obj.get("mime_type") or "").strip()
+        or None
+    )
+    url = (
+        str(part.get("url") or part.get("uri") or part.get("path") or "").strip()
+        or str(file_obj.get("url") or file_obj.get("uri") or file_obj.get("path") or "").strip()
+    )
+    if not url:
+        # OpenAI file_id-only parts have no client-side path we can share.
+        return None
+
+    path = _path_from_file_uri_or_local(url)
+    if path is not None:
+        try:
+            uri = path.resolve().as_uri()
+            size = path.stat().st_size
+        except OSError:
+            return None
+        if not mime:
+            guessed, _ = mimetypes.guess_type(str(path))
+            mime = guessed
+        block: dict[str, Any] = {
+            "type": "resource_link",
+            "uri": uri,
+            "name": name if name != "attachment" else path.name,
+        }
+        if mime:
+            block["mimeType"] = mime
+        if size is not None:
+            block["size"] = int(size)
+        return block
+
+    if url.startswith(("http://", "https://", "file:")):
+        block = {
+            "type": "resource_link",
+            "uri": url,
+            "name": name,
+        }
+        if mime:
+            block["mimeType"] = mime
+        return block
+    return None
+
+
+def _extract_acp_media_blocks(
+    messages: list[dict[str, Any]],
+    *,
+    max_image_bytes: int = _MAX_ACP_IMAGE_BYTES,
+) -> list[dict[str, Any]]:
+    """Collect ACP ContentBlocks (image / resource_link) from Hermes messages.
+
+    Deduplicates by (type, data-or-uri) so continuation turns that re-send
+    history-adjacent images don't inflate the prompt.
+    """
+    blocks: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _add(block: dict[str, Any] | None) -> None:
+        if not block:
+            return
+        key = f"{block.get('type')}|{block.get('data') or ''}|{block.get('uri') or ''}"
+        # Truncate key for huge base64 to avoid giant set entries
+        if len(key) > 200:
+            key = f"{key[:80]}…{key[-40:]}|{len(key)}"
+        if key in seen:
+            return
+        seen.add(key)
+        blocks.append(block)
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            ptype = str(item.get("type") or "").strip().lower()
+            if ptype in _OPENAI_IMAGE_PART_TYPES:
+                image_block = _openai_image_part_to_acp_block(
+                    item, max_bytes=max_image_bytes
+                )
+                if image_block:
+                    _add(image_block)
+                else:
+                    # Fall back: if we only have a remote URL, surface as link.
+                    url = _image_url_from_part(item)
+                    if url.startswith(("http://", "https://")):
+                        _add(
+                            {
+                                "type": "resource_link",
+                                "uri": url,
+                                "name": Path(urlparse(url).path).name or "image",
+                                "mimeType": _guess_image_mime_from_part(item)
+                                or "image/*",
+                            }
+                        )
+            elif ptype in _OPENAI_FILE_PART_TYPES:
+                _add(_openai_file_part_to_resource_link(item))
+            elif ptype == "resource_link":
+                # Already ACP-shaped (e.g. round-tripped through Hermes).
+                uri = str(item.get("uri") or "").strip()
+                name = str(item.get("name") or "resource").strip() or "resource"
+                if uri:
+                    block = {
+                        "type": "resource_link",
+                        "uri": uri,
+                        "name": name,
+                    }
+                    mime = str(item.get("mimeType") or item.get("mime_type") or "").strip()
+                    if mime:
+                        block["mimeType"] = mime
+                    size = item.get("size")
+                    if isinstance(size, int):
+                        block["size"] = size
+                    _add(block)
+    return blocks
+
+
+def _parse_prompt_capabilities(init_result: dict[str, Any] | None) -> dict[str, bool]:
+    """Extract agent promptCapabilities from an ACP initialize result."""
+    caps = {"image": False, "audio": False, "embeddedContext": False}
+    if not isinstance(init_result, dict):
+        return caps
+    agent_caps = init_result.get("agentCapabilities") or init_result.get(
+        "agent_capabilities"
+    )
+    if not isinstance(agent_caps, dict):
+        return caps
+    prompt_caps = agent_caps.get("promptCapabilities") or agent_caps.get(
+        "prompt_capabilities"
+    )
+    if not isinstance(prompt_caps, dict):
+        return caps
+    for key in ("image", "audio", "embeddedContext"):
+        # Also accept snake_case from some SDKs
+        alt = "embedded_context" if key == "embeddedContext" else key
+        val = prompt_caps.get(key)
+        if val is None:
+            val = prompt_caps.get(alt)
+        caps[key] = bool(val)
+    return caps
+
+
+def _build_acp_prompt_blocks(
+    prompt_text: str,
+    media_blocks: list[dict[str, Any]] | None,
+    *,
+    prompt_capabilities: dict[str, bool] | None,
+) -> list[dict[str, Any]]:
+    """Assemble the ``session/prompt`` ``prompt`` array (text + optional media).
+
+    Per ACP, text + resource_link are always allowed; image/audio/resource
+    require the matching ``promptCapabilities`` flag from initialize.
+    """
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": prompt_text,
+        }
+    ]
+    caps = prompt_capabilities or {}
+    allow_image = bool(caps.get("image"))
+    allow_audio = bool(caps.get("audio"))
+    allow_embedded = bool(caps.get("embeddedContext"))
+
+    skipped: list[str] = []
+    for media in media_blocks or []:
+        if not isinstance(media, dict):
+            continue
+        mtype = str(media.get("type") or "").strip().lower()
+        if mtype == "text":
+            text = str(media.get("text") or "").strip()
+            if text:
+                blocks.append({"type": "text", "text": text})
+        elif mtype == "image":
+            if allow_image:
+                blocks.append(media)
+            else:
+                skipped.append("image")
+        elif mtype == "audio":
+            if allow_audio:
+                blocks.append(media)
+            else:
+                skipped.append("audio")
+        elif mtype == "resource":
+            if allow_embedded:
+                blocks.append(media)
+            else:
+                skipped.append("resource")
+        elif mtype == "resource_link":
+            # Baseline: all Agents MUST support ResourceLink.
+            blocks.append(media)
+        else:
+            logger.debug("Ignoring unknown ACP media block type %r", mtype)
+
+    if skipped:
+        # Note once in the text block so the model knows something was dropped.
+        note = (
+            f"\n\n[Hermes note: {', '.join(sorted(set(skipped)))} attachment(s) "
+            "were not forwarded because this ACP agent did not advertise the "
+            "matching promptCapabilities flag.]"
+        )
+        blocks[0] = {
+            "type": "text",
+            "text": str(blocks[0].get("text") or "") + note,
+        }
+    return blocks
 
 
 def _build_openai_tool_call(
@@ -649,6 +1064,13 @@ class CopilotACPClient:
         self._next_rpc_id = 0
         self._initialized = False
         self._spawn_count = 0  # test/metrics: how many times we Popen'd
+        # Agent promptCapabilities from the last successful initialize.
+        # Omitted flags are treated as unsupported per ACP.
+        self._prompt_capabilities: dict[str, bool] = {
+            "image": False,
+            "audio": False,
+            "embeddedContext": False,
+        }
         # Session continuity state (same lock as transport).
         self._session_id: str | None = None
         self._session_history: list[dict[str, Any]] = []
@@ -753,6 +1175,11 @@ class CopilotACPClient:
         self._stderr_tail = None
         self._next_rpc_id = 0
         self._initialized = False
+        self._prompt_capabilities = {
+            "image": False,
+            "audio": False,
+            "embeddedContext": False,
+        }
         self._reset_session_state()
         if mark_closed:
             self.is_closed = True
@@ -1130,6 +1557,10 @@ class CopilotACPClient:
             raise RuntimeError(f"{label} process exited early: {stderr_text}")
         raise TimeoutError(f"Timed out waiting for {label} response to {method}.")
 
+    def _record_initialize_result(self, init: dict[str, Any] | None) -> None:
+        """Cache agent capabilities advertised by ACP ``initialize``."""
+        self._prompt_capabilities = _parse_prompt_capabilities(init)
+
     def _ensure_initialized(self, *, timeout_seconds: float) -> None:
         """Spawn (if needed) and run ACP ``initialize`` once per process."""
         if self._process_alive() and self._initialized:
@@ -1137,7 +1568,7 @@ class CopilotACPClient:
         if not self._process_alive():
             self._reset_transport(mark_closed=False)
             self._spawn_process()
-        self._rpc(
+        init = self._rpc(
             "initialize",
             {
                 "protocolVersion": 1,
@@ -1154,7 +1585,8 @@ class CopilotACPClient:
                 },
             },
             timeout_seconds=timeout_seconds,
-        )
+        ) or {}
+        self._record_initialize_result(init)
         self._initialized = True
 
     def _run_conversation_prompt(
@@ -1190,13 +1622,15 @@ class CopilotACPClient:
                         continue_session = True
 
                 if continue_session:
+                    delta_messages = messages[prefix_len:]
                     prompt_text = _format_messages_as_prompt(
-                        messages[prefix_len:],
+                        delta_messages,
                         model=model,
                         tools=self._prompt_tools(tools),
                         tool_choice=tool_choice,
                         continuation=True,
                     )
+                    media_blocks = _extract_acp_media_blocks(delta_messages)
                     session_id = self._session_id
                     assert session_id is not None
                     try:
@@ -1206,6 +1640,7 @@ class CopilotACPClient:
                             timeout_seconds=timeout_seconds,
                             on_text_chunk=on_text_chunk,
                             on_reasoning_chunk=on_reasoning_chunk,
+                            media_blocks=media_blocks,
                         )
                         self._session_continues += 1
                         self._session_history = list(messages)
@@ -1222,6 +1657,7 @@ class CopilotACPClient:
                     tool_choice=tool_choice,
                     continuation=False,
                 )
+                media_blocks = _extract_acp_media_blocks(messages)
                 session = self._rpc(
                     "session/new",
                     {
@@ -1250,6 +1686,7 @@ class CopilotACPClient:
                     timeout_seconds=timeout_seconds,
                     on_text_chunk=on_text_chunk,
                     on_reasoning_chunk=on_reasoning_chunk,
+                    media_blocks=media_blocks,
                 )
                 self._session_history = list(messages)
                 return text, reasoning
@@ -1270,6 +1707,7 @@ class CopilotACPClient:
         timeout_seconds: float,
         on_text_chunk: Any = None,
         on_reasoning_chunk: Any = None,
+        media_blocks: list[dict[str, Any]] | None = None,
     ) -> tuple[str, str]:
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -1289,16 +1727,16 @@ class CopilotACPClient:
         except Exception:
             pass
         session_deadline = time.monotonic() + timeout_seconds
+        prompt_blocks = _build_acp_prompt_blocks(
+            prompt_text,
+            media_blocks,
+            prompt_capabilities=self._prompt_capabilities,
+        )
         self._rpc(
             "session/prompt",
             {
                 "sessionId": session_id,
-                "prompt": [
-                    {
-                        "type": "text",
-                        "text": prompt_text,
-                    }
-                ],
+                "prompt": prompt_blocks,
             },
             timeout_seconds=timeout_seconds,
             text_parts=text_parts,

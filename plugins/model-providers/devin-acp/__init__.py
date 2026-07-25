@@ -30,6 +30,9 @@ devin_acp = DevinACPProfile(
     env_vars=(),
     base_url="acp://devin",
     auth_type="external_process",
+    # Native image_url parts are re-encoded as ACP content blocks when the
+    # Devin agent advertises promptCapabilities.image.
+    supports_vision=True,
 )
 
 register_provider(devin_acp)

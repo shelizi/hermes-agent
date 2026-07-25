@@ -311,6 +311,9 @@ class GrokACPClient(CopilotACPClient):
             },
             timeout_seconds=timeout_seconds,
         ) or {}
+        # Capture promptCapabilities (image/audio/embeddedContext) so
+        # session/prompt can attach ACP content parts when supported.
+        self._record_initialize_result(init)
         self._initialized = True
         self._authenticate(init, timeout_seconds=timeout_seconds)
 

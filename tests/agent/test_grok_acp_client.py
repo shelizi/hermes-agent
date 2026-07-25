@@ -211,5 +211,47 @@ class TestGrokAcpHermesMcpBridge(unittest.TestCase):
         tools_build.assert_called_once_with()
 
 
+class TestGrokAcpImageContentParts(unittest.TestCase):
+    """Grok ACP records promptCapabilities and forwards image content parts."""
+
+    def test_initialize_records_image_prompt_capability(self):
+        client = GrokACPClient(
+            acp_cwd="/tmp",
+            command="grok",
+            args=["--no-auto-update", "agent", "stdio"],
+        )
+        # Pretend the process is already warm so _ensure_initialized only RPCs.
+        client._initialized = False
+
+        def fake_alive():
+            return True
+
+        def fake_rpc(method, params, **kwargs):
+            assert method == "initialize"
+            return {
+                "protocolVersion": 1,
+                "agentCapabilities": {
+                    "promptCapabilities": {"image": True, "audio": False},
+                },
+                "authMethods": [],
+            }
+
+        with patch.object(client, "_process_alive", side_effect=fake_alive), patch.object(
+            client, "_rpc", side_effect=fake_rpc
+        ):
+            client._ensure_initialized(timeout_seconds=5)
+
+        assert client._initialized is True
+        assert client._prompt_capabilities["image"] is True
+        assert client._prompt_capabilities["audio"] is False
+
+    def test_image_routing_treats_grok_acp_as_vision_capable(self):
+        from agent.image_routing import _lookup_supports_vision
+
+        assert _lookup_supports_vision("grok-acp", "grok-4.5", {}) is True
+        assert _lookup_supports_vision("devin-acp", "devin", {}) is True
+        assert _lookup_supports_vision("copilot-acp", "copilot-acp", {}) is True
+
+
 if __name__ == "__main__":
     unittest.main()

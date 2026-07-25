@@ -37,6 +37,10 @@ grok_acp = GrokACPProfile(
     env_vars=(),
     base_url="acp://grok",
     auth_type="external_process",
+    # Keep OpenAI-style image_url parts on the user turn so GrokACPClient can
+    # re-encode them as ACP ``image`` content blocks when the CLI advertises
+    # promptCapabilities.image (see agent/copilot_acp_client.py).
+    supports_vision=True,
 )
 
 register_provider(grok_acp)
