@@ -265,6 +265,8 @@ model:
 
 Hermes reuses the local `grok agent stdio` process, authenticates via ACP (`cached_token` or `xai.api_key` per [xAI headless docs](https://docs.x.ai/build/cli/headless-scripting)), and binds models with `session/set_model` after `session/new`. Live model discovery uses `grok models`.
 
+Like Devin ACP, Grok ACP attaches Hermes **MCP bridges** at `session/new` (`hermes-memory` + `hermes-tools`) so the Grok Build agent can call Hermes tools natively instead of textual XML tool blocks.
+
 **Desktop / dashboard:** When the CLI is installed and local credentials are detected (`~/.grok/auth.json` or `XAI_API_KEY`), Model Picker can list `grok-acp`. Authenticate with `grok login` in a terminal.
 
 ### First-Class API-Key Providers

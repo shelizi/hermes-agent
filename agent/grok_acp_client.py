@@ -12,6 +12,11 @@ Model selection (verified against Grok CLI 0.2.x on Windows):
   - The CLI also advertises ``authMethods`` after ``initialize``; we call
     ``authenticate`` with the cached token or ``xai.api_key`` when present.
 
+Tools (same pattern as Devin ACP):
+  - Hermes memory + tools are attached as MCP servers on ``session/new``.
+  - Textual ``<tool_call>`` schemas are omitted from the prompt to avoid a
+    competing interface.
+
 Docs: https://docs.x.ai/build/cli/headless-scripting ·
       https://agentclientprotocol.com/protocol/v1/session ·
       https://zed.dev/acp/agent/grok-build
@@ -228,6 +233,57 @@ class GrokACPClient(CopilotACPClient):
             != _norm_model_token(desired)
         ):
             self._reset_session_state()
+
+    def _session_mcp_servers(
+        self,
+        tools: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """Attach Hermes MCP bridges for tools granted to this ACP session.
+
+        Same pattern as :class:`DevinACPClient`: expose Hermes memory + core
+        tools to Grok Build over MCP so the CLI agent can call them natively
+        instead of relying on textual ``<tool_call>`` blocks.
+        """
+        tool_names = {
+            item.get("function", {}).get("name")
+            for item in (tools or [])
+            if isinstance(item, dict)
+        }
+        servers: list[dict[str, Any]] = []
+
+        if tools is None or "memory" in tool_names:
+            try:
+                from agent.transports.hermes_memory_mcp_server import (
+                    build_acp_server_config,
+                )
+
+                servers.extend(build_acp_server_config())
+            except Exception as exc:
+                logger.warning("Grok ACP memory bridge disabled: %s", exc)
+
+        try:
+            from agent.transports.hermes_tools_mcp_server import (
+                build_acp_server_config,
+            )
+
+            if tools is None:
+                servers.extend(build_acp_server_config())
+            else:
+                servers.extend(build_acp_server_config(allowed_tools=tool_names))
+        except Exception as exc:
+            logger.warning("Grok ACP Hermes-tools bridge disabled: %s", exc)
+
+        return servers
+
+    def _prompt_tools(self, tools: list[dict[str, Any]] | None) -> None:
+        """Prefer Hermes MCP tools over textual XML tool calls in the prompt.
+
+        MCP servers attached at ``session/new`` already publish the
+        authoritative schemas; duplicating OpenAI function schemas in the
+        prompt only creates a competing interface (same rationale as Devin).
+        """
+        del tools
+        return None
 
     def _ensure_initialized(self, *, timeout_seconds: float) -> None:
         """Spawn (if needed), run ACP ``initialize`` and ``authenticate``."""

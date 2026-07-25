@@ -127,5 +127,89 @@ class TestGrokAcpClientDefaults(unittest.TestCase):
         assert isinstance(client, GrokACPClient)
 
 
+class TestGrokAcpHermesMcpBridge(unittest.TestCase):
+    """Hermes memory + tools MCP servers attached like Devin ACP."""
+
+    def test_memory_mcp_bridge_is_attached_only_when_memory_is_granted(self):
+        client = GrokACPClient(
+            acp_cwd="/tmp",
+            command="grok",
+            args=["--no-auto-update", "agent", "stdio"],
+        )
+        memory_tools = [
+            {
+                "type": "function",
+                "function": {"name": "memory"},
+            }
+        ]
+        with patch(
+            "agent.transports.hermes_memory_mcp_server.build_acp_server_config",
+            return_value=[{"name": "hermes-memory"}],
+        ) as build:
+            assert client._session_mcp_servers([]) == []
+            assert client._session_mcp_servers(memory_tools) == [
+                {"name": "hermes-memory"}
+            ]
+        build.assert_called_once_with()
+
+    def test_hermes_tools_mcp_bridge_uses_granted_tool_names(self):
+        client = GrokACPClient(
+            acp_cwd="/tmp",
+            command="grok",
+            args=["--no-auto-update", "agent", "stdio"],
+        )
+        tools = [
+            {"type": "function", "function": {"name": "skills_list"}},
+            {"type": "function", "function": {"name": "skill_view"}},
+            {"type": "function", "function": {"name": "skill_manage"}},
+            {"type": "function", "function": {"name": "todo"}},
+            {"type": "function", "function": {"name": "session_search"}},
+        ]
+        with patch(
+            "agent.transports.hermes_tools_mcp_server.build_acp_server_config",
+            return_value=[{"name": "hermes-tools"}],
+        ) as build:
+            assert client._session_mcp_servers(tools) == [{"name": "hermes-tools"}]
+
+        build.assert_called_once()
+        assert set(build.call_args.kwargs["allowed_tools"]) == {
+            "skills_list",
+            "skill_view",
+            "skill_manage",
+            "todo",
+            "session_search",
+        }
+
+    def test_native_mcp_tools_are_not_duplicated_in_text_prompt(self):
+        client = GrokACPClient(
+            acp_cwd="/tmp",
+            command="grok",
+            args=["--no-auto-update", "agent", "stdio"],
+        )
+        tools = [{"type": "function", "function": {"name": "skill_view"}}]
+        assert client._prompt_tools(tools) is None
+
+    def test_native_mcp_bridge_exposes_all_tools_without_prompt_schema(self):
+        client = GrokACPClient(
+            acp_cwd="/tmp",
+            command="grok",
+            args=["--no-auto-update", "agent", "stdio"],
+        )
+        with patch(
+            "agent.transports.hermes_memory_mcp_server.build_acp_server_config",
+            return_value=[{"name": "hermes-memory"}],
+        ) as memory_build, patch(
+            "agent.transports.hermes_tools_mcp_server.build_acp_server_config",
+            return_value=[{"name": "hermes-tools"}],
+        ) as tools_build:
+            assert client._session_mcp_servers(None) == [
+                {"name": "hermes-memory"},
+                {"name": "hermes-tools"},
+            ]
+
+        memory_build.assert_called_once_with()
+        tools_build.assert_called_once_with()
+
+
 if __name__ == "__main__":
     unittest.main()
