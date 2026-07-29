@@ -6893,6 +6893,16 @@ def _resolve_external_process_command_args(provider_id: str) -> tuple[str, list[
         args = shlex.split(raw_args)
     else:
         args = list(spec.get("default_args") or ["--acp", "--stdio"])
+
+    # Antigravity ACP: adapter binaries (agy-acp, antigravity-acp, etc.) are
+    # already in ACP server mode; only the native ``agy`` binary needs the
+    # ``--acp`` launch flag. If no args env override is set and the resolved
+    # command is not the native binary, drop the default ``--acp`` flag.
+    if provider_id == "antigravity-acp":
+        command_name = Path(command).name.casefold()
+        if command_name not in {"agy", "agy.exe", "antigravity", "antigravity.exe"}:
+            args = []
+
     return command, args
 
 

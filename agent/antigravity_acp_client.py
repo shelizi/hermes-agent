@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import shlex
+from pathlib import Path
 from typing import Any
 
 from agent.copilot_acp_client import CopilotACPClient, _coalesce_acp_args
@@ -50,14 +51,18 @@ def _resolve_command() -> str:
     return "agy"
 
 
-def _resolve_args() -> list[str]:
+def _resolve_args(command: str | None = None) -> list[str]:
     raw = os.getenv("HERMES_ANTIGRAVITY_ACP_ARGS", "").strip()
-    if not raw:
-        # Expected native ACP entrypoint once google-antigravity/antigravity-cli#31
-        # lands. If you are using the current ``agy`` release (no native ACP),
-        # override this to point at an adapter binary (e.g. ``agy-acp``).
-        return ["--acp"]
-    return shlex.split(raw)
+    if raw:
+        return shlex.split(raw)
+    # Native ACP entrypoint once google-antigravity/antigravity-cli#31 lands.
+    # Adapter binaries (agy-acp, antigravity-acp, etc.) are already in ACP
+    # server mode and should not receive the native ``--acp`` launch flag.
+    if command:
+        name = Path(command).name.casefold()
+        if name not in {"agy", "agy.exe", "antigravity", "antigravity.exe"}:
+            return []
+    return ["--acp"]
 
 
 class AntigravityACPClient(CopilotACPClient):
@@ -87,7 +92,9 @@ class AntigravityACPClient(CopilotACPClient):
         # ``args=[]`` from incomplete call-site wiring cannot fall through to
         # CopilotACPClient's module-level defaults (``--acp --stdio``).
         resolved_command = acp_command or command or _resolve_command()
-        resolved_args = _coalesce_acp_args(acp_args, args, _resolve_args)
+        resolved_args = _coalesce_acp_args(
+            acp_args, args, lambda: _resolve_args(resolved_command)
+        )
         super().__init__(
             api_key=api_key or "antigravity-acp",
             base_url=base_url or ACP_MARKER_BASE_URL,

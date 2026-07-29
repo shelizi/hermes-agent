@@ -72,6 +72,14 @@ class TestAntigravityAcpClientDefaults(unittest.TestCase):
             client = AntigravityACPClient()
             assert client._acp_command == "/opt/antigravity/bin/antigravity"
 
+    def test_resolve_args_native_agy_gets_acp_flag(self):
+        assert _resolve_args("agy") == ["--acp"]
+        assert _resolve_args("C:\\Program Files\\antigravity\\bin\\agy.exe") == ["--acp"]
+
+    def test_resolve_args_adapter_gets_no_default_flags(self):
+        assert _resolve_args("agy-acp") == []
+        assert _resolve_args("/usr/local/bin/antigravity-acp") == []
+
     def test_resolve_args_from_credentials(self):
         with patch(
             "hermes_cli.auth.shutil.which",
