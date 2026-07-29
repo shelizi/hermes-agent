@@ -1,0 +1,5 @@
+name: antigravity-acp-provider
+kind: model-provider
+version: 1.0.0
+description: Google Antigravity CLI via ACP subprocess (antigravity acp)
+author: Community

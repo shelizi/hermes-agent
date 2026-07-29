@@ -98,6 +98,7 @@ DEFAULT_GITHUB_MODELS_BASE_URL = "https://api.githubcopilot.com"
 DEFAULT_COPILOT_ACP_BASE_URL = "acp://copilot"
 DEFAULT_DEVIN_ACP_BASE_URL = "acp://devin"
 DEFAULT_GROK_ACP_BASE_URL = "acp://grok"
+DEFAULT_ANTIGRAVITY_ACP_BASE_URL = "acp://antigravity"
 DEFAULT_OLLAMA_CLOUD_BASE_URL = "https://ollama.com/v1"
 STEPFUN_STEP_PLAN_INTL_BASE_URL = "https://api.stepfun.ai/step_plan/v1"
 STEPFUN_STEP_PLAN_CN_BASE_URL = "https://api.stepfun.com/step_plan/v1"
@@ -247,6 +248,13 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         auth_type="external_process",
         inference_base_url=DEFAULT_GROK_ACP_BASE_URL,
         base_url_env_var="GROK_ACP_BASE_URL",
+    ),
+    "antigravity-acp": ProviderConfig(
+        id="antigravity-acp",
+        name="Google Antigravity CLI ACP",
+        auth_type="external_process",
+        inference_base_url=DEFAULT_ANTIGRAVITY_ACP_BASE_URL,
+        base_url_env_var="ANTIGRAVITY_ACP_BASE_URL",
     ),
     "gemini": ProviderConfig(
         id="gemini",
@@ -1915,6 +1923,8 @@ def resolve_provider(
         "github-copilot-acp": "copilot-acp", "copilot-acp-agent": "copilot-acp",
         "devin": "devin-acp", "devin-cli": "devin-acp", "cognition-devin": "devin-acp",
         "grok-cli": "grok-acp", "grok-build": "grok-acp", "xai-grok-cli": "grok-acp",
+        "antigravity": "antigravity-acp", "antigravity-cli": "antigravity-acp",
+        "google-antigravity": "antigravity-acp", "google-antigravity-cli": "antigravity-acp",
         "opencode": "opencode-zen", "zen": "opencode-zen",
         "qwen-portal": "qwen-oauth", "qwen-cli": "qwen-oauth", "qwen-oauth": "qwen-oauth",
         "hf": "huggingface", "hugging-face": "huggingface", "huggingface-hub": "huggingface",
@@ -6849,6 +6859,20 @@ def _external_process_spec(provider_id: str) -> Dict[str, Any]:
                 "or set HERMES_GROK_ACP_COMMAND/GROK_CLI_PATH."
             ),
         },
+        "antigravity-acp": {
+            "command_env": ("HERMES_ANTIGRAVITY_ACP_COMMAND", "ANTIGRAVITY_CLI_PATH"),
+            "default_command": "antigravity",
+            "args_env": "HERMES_ANTIGRAVITY_ACP_ARGS",
+            # Sensible ACP entrypoint until the CLI docs are published.
+            "default_args": ["acp"],
+            "api_key": "antigravity-acp",
+            "missing_code": "missing_antigravity_cli",
+            "missing_msg": (
+                "Could not find the Antigravity CLI command '{command}'. "
+                "Install Google Antigravity CLI or set "
+                "HERMES_ANTIGRAVITY_ACP_COMMAND/ANTIGRAVITY_CLI_PATH."
+            ),
+        },
     }
     return dict(specs.get(provider_id) or specs["copilot-acp"])
 
@@ -6895,6 +6919,19 @@ def _resolve_external_process_command_path(
         return resolved
 
     command_name = Path(command).name.casefold()
+
+    if provider_id == "antigravity-acp":
+        # Antigravity CLI ships under ``~/.antigravity/bin/`` in early previews.
+        if command_name not in {"antigravity", "antigravity.exe"}:
+            return None
+        home = Path.home()
+        for candidate in (
+            home / ".antigravity" / "bin" / "antigravity.exe",
+            home / ".antigravity" / "bin" / "antigravity",
+        ):
+            if candidate.is_file():
+                return str(candidate)
+        return None
 
     if provider_id == "grok-acp":
         # Only auto-lookup the default command name; respect explicit overrides.
@@ -7010,8 +7047,8 @@ def _external_process_auth_present(provider_id: str) -> Optional[bool]:
         return _devin_local_credentials_present()
     if provider_id == "grok-acp":
         return _grok_local_credentials_present()
-    # Copilot ACP auth is CLI/session specific; PATH presence is the only
-    # cheap signal we have without spawning the binary.
+    # Copilot and Antigravity ACP auth are CLI/session specific; PATH presence
+    # is the only cheap signal we have without spawning the binary.
     return None
 
 

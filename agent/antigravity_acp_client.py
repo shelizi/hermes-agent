@@ -1,0 +1,122 @@
+"""OpenAI-compatible shim that forwards Hermes requests to the Antigravity CLI ACP.
+
+Mirrors :class:`agent.copilot_acp_client.CopilotACPClient` for the Google
+Antigravity CLI ACP mode (JSON-RPC over stdio). Process reuse and per-prompt
+``session/new`` follow the shared ACP client lifecycle (see parent module).
+
+This is a skeleton provider: command/args and base URL are resolved from env
+vars or the shared credential resolver, matching the Devin/Grok ACP pattern.
+Model and auth binding are left as no-ops until the CLI advertises specific
+ACP methods (e.g. ``session/set_model`` or ``authenticate``).
+
+Duck-typed env overrides:
+  HERMES_ANTIGRAVITY_ACP_COMMAND / ANTIGRAVITY_CLI_PATH  -> binary path
+  HERMES_ANTIGRAVITY_ACP_ARGS                            -> argv override
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shlex
+from typing import Any
+
+from agent.copilot_acp_client import CopilotACPClient, _coalesce_acp_args
+
+logger = logging.getLogger(__name__)
+
+ACP_MARKER_BASE_URL = "acp://antigravity"
+
+
+def _resolve_command() -> str:
+    env = (
+        os.getenv("HERMES_ANTIGRAVITY_ACP_COMMAND", "").strip()
+        or os.getenv("ANTIGRAVITY_CLI_PATH", "").strip()
+    )
+    if env:
+        return env
+
+    try:
+        from hermes_cli.auth import _resolve_external_process_command_path
+
+        resolved = _resolve_external_process_command_path(
+            "antigravity-acp", "antigravity"
+        )
+        if resolved:
+            return resolved
+    except Exception:
+        pass
+
+    return "antigravity"
+
+
+def _resolve_args() -> list[str]:
+    raw = os.getenv("HERMES_ANTIGRAVITY_ACP_ARGS", "").strip()
+    if not raw:
+        # Sensible default for an ``antigravity acp`` ACP entrypoint.
+        return ["acp"]
+    return shlex.split(raw)
+
+
+class AntigravityACPClient(CopilotACPClient):
+    """Minimal OpenAI-client-compatible facade for Google Antigravity CLI ACP."""
+
+    _acp_display_name = "Antigravity ACP"
+    _default_model_name = "antigravity-acp"
+    _install_hint = (
+        "Install Google Antigravity CLI or set "
+        "HERMES_ANTIGRAVITY_ACP_COMMAND/ANTIGRAVITY_CLI_PATH."
+    )
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        default_headers: dict[str, str] | None = None,
+        acp_command: str | None = None,
+        acp_args: list[str] | None = None,
+        acp_cwd: str | None = None,
+        command: str | None = None,
+        args: list[str] | None = None,
+        **kwargs: Any,
+    ):
+        # Resolve against Antigravity defaults *before* super(), so an empty
+        # ``args=[]`` from incomplete call-site wiring cannot fall through to
+        # CopilotACPClient's module-level defaults (``--acp --stdio``).
+        resolved_command = acp_command or command or _resolve_command()
+        resolved_args = _coalesce_acp_args(acp_args, args, _resolve_args)
+        super().__init__(
+            api_key=api_key or "antigravity-acp",
+            base_url=base_url or ACP_MARKER_BASE_URL,
+            default_headers=default_headers,
+            acp_command=resolved_command,
+            acp_args=resolved_args,
+            acp_cwd=acp_cwd,
+            **kwargs,
+        )
+        # Re-assert the resolved argv in case kwargs still carried a stale
+        # empty list.
+        self._acp_command = resolved_command
+        self._acp_args = resolved_args
+
+    def _create_chat_completion(
+        self,
+        *,
+        model: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        timeout: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        return super()._create_chat_completion(
+            model=model or "antigravity-acp",
+            messages=messages,
+            timeout=timeout,
+            tools=tools,
+            tool_choice=tool_choice,
+            stream=stream,
+            **kwargs,
+        )
