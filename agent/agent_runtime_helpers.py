@@ -2003,6 +2003,7 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
             shared,
             agent._client_log_context(),
         )
+        client.shared_client = True
         return client
     if agent.provider == "gemini":
         from agent.gemini_native_adapter import GeminiNativeClient, is_native_gemini_base_url
@@ -2062,6 +2063,10 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     # Uses the module-level `OpenAI` name, resolved lazily on first
     # access via __getattr__ below. Tests patch via `run_agent.OpenAI`.
     client = _ra().OpenAI(**client_kwargs)
+    if agent.provider == "moa":
+        # MoA is an in-process facade: the aggregator client is reused across
+        # reference calls, so per-request close paths must leave it open.
+        client.shared_client = True
     _ra().logger.info(
         "OpenAI client created (%s, shared=%s) %s",
         reason,

@@ -1061,6 +1061,10 @@ class CopilotACPClient:
     _install_hint = (
         "Install GitHub Copilot CLI or set HERMES_COPILOT_ACP_COMMAND/COPILOT_CLI_PATH."
     )
+    # This client wraps a long-lived subprocess and must not be closed on a
+    # per-request path. run_agent.py honors this flag instead of provider-name
+    # checks when deciding request-client lifecycle.
+    shared_client = True
 
     def __init__(
         self,

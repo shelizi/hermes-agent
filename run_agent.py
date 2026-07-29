@@ -2999,21 +2999,18 @@ class AIAgent:
                 child.interrupt(message)
             except Exception as e:
                 logger.debug("Failed to propagate interrupt to child agent: %s", e)
-        # Warm ACP subprocesses block on stdio RPC — kill them so /stop is
-        # immediate rather than waiting for Devin/Copilot to finish the turn.
+        # Clients that expose an interrupt hook (e.g. ACP subprocesses) block
+        # on I/O — ask them to stop immediately so /stop is timely. Duck-typing
+        # keeps this path provider-agnostic: any client with ``interrupt``
+        # gets a chance to tear down before the turn waits it out. We do not
+        # fall back to ``close()`` here; regular OpenAI clients have close()
+        # and must not be torn down on a mere /stop.
         try:
-            from agent.acp_client_factory import is_acp_provider
-
             client = getattr(self, "client", None)
-            if client is not None and is_acp_provider(
-                getattr(self, "provider", None), getattr(self, "base_url", None)
-            ):
-                if hasattr(client, "interrupt"):
-                    client.interrupt()
-                elif hasattr(client, "close"):
-                    client.close()
+            if client is not None and hasattr(client, "interrupt"):
+                client.interrupt()
         except Exception as e:
-            logger.debug("Failed to interrupt ACP client: %s", e)
+            logger.debug("Failed to interrupt client: %s", e)
         if not self.quiet_mode:
             print("\n⚡ Interrupt requested" + (f": '{message[:40]}...'" if message and len(message) > 40 else f": '{message}'" if message else ""))
 
@@ -4701,21 +4698,18 @@ class AIAgent:
 
         return copilot_request_headers(is_agent_turn=True, is_vision=is_vision)
 
-    def _uses_shared_request_client(self) -> bool:
-        """True when per-request API calls should reuse ``self.client``.
+    @staticmethod
+    def _is_shared_client(client: Any) -> bool:
+        """True when *client* is reused across turns and must not be closed per-request.
 
-        MoA is an in-process facade. ACP backends (copilot-acp / devin-acp)
-        keep a warm local subprocess — spawning a fresh client per request
-        would kill process reuse and re-pay CLI cold start every turn.
+        ACP clients wrap a long-lived subprocess; MoA is an in-process facade
+        that shares the aggregator client across reference calls. Both are
+        marked with ``shared_client = True`` by the factory so core lifecycle
+        code can avoid provider-name checks.
         """
-        if self.provider == "moa":
-            return True
-        try:
-            from agent.acp_client_factory import is_acp_provider
-
-            return is_acp_provider(self.provider, getattr(self, "base_url", None))
-        except Exception:
+        if client is None:
             return False
+        return bool(getattr(client, "shared_client", False))
 
     # Close reasons the request workers' own ``finally`` unwind reports for
     # a request that produced a response — the only closes that both come
@@ -4742,7 +4736,7 @@ class AIAgent:
         from unittest.mock import Mock
 
         primary_client = self._ensure_primary_openai_client(reason=reason)
-        if self._uses_shared_request_client():
+        if self._is_shared_client(primary_client):
             return primary_client
         if isinstance(primary_client, Mock):
             return primary_client
@@ -4815,10 +4809,9 @@ class AIAgent:
         return client
 
     def _close_request_openai_client(self, client: Any, *, reason: str) -> None:
-        # Shared primary clients (MoA / ACP) are reused across turns; only
+        # Shared clients (MoA / ACP) are reused across turns; only
         # ephemeral request-scoped OpenAI clients should be closed here.
-        primary = getattr(self, "client", None)
-        if client is not None and primary is not None and client is primary:
+        if self._is_shared_client(client):
             return
         with self._openai_client_lock():
             cache = self._request_client_cache_ref()
@@ -4877,10 +4870,9 @@ class AIAgent:
         """
         if client is None:
             return
-        primary = getattr(self, "client", None)
-        if primary is not None and client is primary:
-            # ACP subprocess has no TCP pool to half-close; leave it for the
-            # owning turn / agent.close() path.
+        if self._is_shared_client(client):
+            # Shared clients (MoA primary, ACP subprocess) have no per-request
+            # TCP pool to half-close; leave them for the owning turn / close path.
             return
         # A pool whose sockets were shut down from a stranger thread must
         # never be reused: poison the cache slot so the owner-thread close
