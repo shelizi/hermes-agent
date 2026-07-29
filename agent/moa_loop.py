@@ -2065,6 +2065,11 @@ class MoAChatCompletions:
 
 
 class MoAClient:
+    # The MoA facade can stream, but without a display/TTS consumer the
+    # complete-response path is cheaper and matches prior quiet/subagent
+    # behavior. conversation_loop.py honors this instead of provider-name checks.
+    prefers_sync_without_consumers = True
+
     def __init__(self, preset_name: str, reference_callback: Any = None, agent: Any = None):
         self.chat = type("_MoAChat", (), {})()
         self.chat.completions = MoAChatCompletions(

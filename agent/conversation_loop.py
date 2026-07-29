@@ -27,7 +27,6 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from agent.acp_client_factory import is_acp_provider
 from agent.codex_responses_adapter import _summarize_user_message_for_log
 from agent.conversation_compression import (
     COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE,
@@ -2187,28 +2186,18 @@ def run_conversation(
                         agent.thinking_callback("")
 
                 _use_streaming = True
+                client = getattr(agent, "client", None)
                 # Provider signaled "stream not supported" on a previous
                 # attempt — switch to non-streaming for the rest of this
                 # session instead of re-failing every retry.
                 if getattr(agent, "_disable_streaming", False):
                     _use_streaming = False
-                # ACP backends can stream agent_message_chunk frames as
-                # OpenAI-style deltas. Without a display/TTS consumer, keep
-                # the complete-response path (cheaper for quiet/subagent
-                # turns). Process/session reuse still applies either way.
-                elif is_acp_provider(agent.provider, agent.base_url):
-                    if not agent._has_stream_consumers():
-                        _use_streaming = False
-                # MoA streams only when a display/TTS consumer is present to
-                # receive the deltas. MoAChatCompletions.create() honors
-                # stream=True (runs the references, then returns the aggregator's
-                # raw token stream) and is reached here because, for provider
-                # "moa", _create_request_openai_client returns the MoA facade
-                # itself. Without consumers (quiet mode, subagents, health-check
-                # probes) we keep the complete-response path: the facade returns a
-                # whole response when stream is not requested, preserving the
-                # prior behavior for those callers.
-                elif agent.provider == "moa" and not agent._has_stream_consumers():
+                # Clients that advertise ``prefers_sync_without_consumers`` can
+                # stream, but the complete-response path is cheaper for quiet or
+                # subagent turns that have no display/TTS consumer. ACP and MoA
+                # both set this flag; regular wire clients keep streaming for
+                # health checking / stale-call detection even without consumers.
+                elif getattr(client, "prefers_sync_without_consumers", False) and not agent._has_stream_consumers():
                     _use_streaming = False
                 elif not agent._has_stream_consumers():
                     # No display/TTS consumer. Still prefer streaming for

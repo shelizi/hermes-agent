@@ -1983,6 +1983,11 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     from agent.acp_client_factory import create_acp_client, is_acp_provider
 
     if is_acp_provider(agent.provider, client_kwargs.get("base_url")):
+        # Forward runtime ACP command/args from the agent if the caller did not
+        # supply them explicitly. This used to live in agent_init.py; keeping it
+        # in the factory means only the client construction site knows about ACP.
+        client_kwargs.setdefault("command", agent.acp_command)
+        client_kwargs.setdefault("args", agent.acp_args or None)
         client = create_acp_client(provider=agent.provider, **client_kwargs)
         # Wire tool_call / tool_call_update → Desktop/TUI activity strip so
         # long Devin/Copilot ACP turns don't look frozen after the first text.

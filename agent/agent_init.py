@@ -1132,11 +1132,9 @@ def init_agent(
                 client_kwargs = {"api_key": api_key, "base_url": base_url}
             if _provider_timeout is not None:
                 client_kwargs["timeout"] = _provider_timeout
-            if is_acp_provider(agent.provider, base_url):
-                client_kwargs["command"] = agent.acp_command
-                # Prefer None over [] so the ACP client can apply provider
-                # defaults when a call site forgot to forward runtime args.
-                client_kwargs["args"] = agent.acp_args or None
+            # ACP command/args are now injected by create_openai_client in
+            # agent_runtime_helpers.py, the single chokepoint for ACP client
+            # construction, so agent_init.py no longer needs provider detection.
             effective_base = base_url
             if base_url_host_matches(effective_base, "openrouter.ai"):
                 from agent.auxiliary_client import build_or_headers

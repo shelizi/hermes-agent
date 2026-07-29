@@ -1065,6 +1065,9 @@ class CopilotACPClient:
     # per-request path. run_agent.py honors this flag instead of provider-name
     # checks when deciding request-client lifecycle.
     shared_client = True
+    # ACP can stream, but the complete-response path is cheaper for quiet/
+    # subagent turns that have no display/TTS consumer.
+    prefers_sync_without_consumers = True
 
     def __init__(
         self,
