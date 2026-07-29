@@ -6861,16 +6861,17 @@ def _external_process_spec(provider_id: str) -> Dict[str, Any]:
         },
         "antigravity-acp": {
             "command_env": ("HERMES_ANTIGRAVITY_ACP_COMMAND", "ANTIGRAVITY_CLI_PATH"),
-            "default_command": "antigravity",
+            "default_command": "agy",
             "args_env": "HERMES_ANTIGRAVITY_ACP_ARGS",
-            # Sensible ACP entrypoint until the CLI docs are published.
-            "default_args": ["acp"],
+            # Native ACP entrypoint is ``agy --acp`` (not yet shipped as of 1.0.16).
+            # Until then, override this to an adapter binary such as ``agy-acp``.
+            "default_args": ["--acp"],
             "api_key": "antigravity-acp",
             "missing_code": "missing_antigravity_cli",
             "missing_msg": (
                 "Could not find the Antigravity CLI command '{command}'. "
-                "Install Google Antigravity CLI or set "
-                "HERMES_ANTIGRAVITY_ACP_COMMAND/ANTIGRAVITY_CLI_PATH."
+                "Install Google Antigravity CLI (agy) or an ACP adapter (agy-acp), "
+                "or set HERMES_ANTIGRAVITY_ACP_COMMAND/ANTIGRAVITY_CLI_PATH."
             ),
         },
     }
@@ -6921,13 +6922,14 @@ def _resolve_external_process_command_path(
     command_name = Path(command).name.casefold()
 
     if provider_id == "antigravity-acp":
-        # Antigravity CLI ships under ``~/.antigravity/bin/`` in early previews.
-        if command_name not in {"antigravity", "antigravity.exe"}:
+        # Antigravity CLI binary is ``agy``. Official installer puts it under
+        # ``~/.antigravity/bin/``; package managers (scoop, etc.) put it on PATH.
+        if command_name not in {"agy", "agy.exe"}:
             return None
         home = Path.home()
         for candidate in (
-            home / ".antigravity" / "bin" / "antigravity.exe",
-            home / ".antigravity" / "bin" / "antigravity",
+            home / ".antigravity" / "bin" / "agy.exe",
+            home / ".antigravity" / "bin" / "agy",
         ):
             if candidate.is_file():
                 return str(candidate)

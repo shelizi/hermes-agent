@@ -38,16 +38,16 @@ class TestAntigravityAcpProviderRegistry(unittest.TestCase):
 class TestAntigravityAcpClientDefaults(unittest.TestCase):
     def test_marker_and_defaults(self):
         assert ACP_MARKER_BASE_URL == "acp://antigravity"
-        assert _resolve_args() == ["acp"]
+        assert _resolve_args() == ["--acp"]
         client = AntigravityACPClient(
             acp_cwd="/tmp",
-            command="antigravity",
-            args=["acp"],
+            command="agy",
+            args=["--acp"],
         )
         assert client.api_key == "antigravity-acp"
         assert client.base_url == "acp://antigravity"
-        assert client._acp_command == "antigravity"
-        assert client._acp_args == ["acp"]
+        assert client._acp_command == "agy"
+        assert client._acp_args == ["--acp"]
 
     def test_create_acp_client_factory_returns_antigravity_client(self):
         client = create_acp_client(provider="antigravity-acp")
@@ -75,7 +75,7 @@ class TestAntigravityAcpClientDefaults(unittest.TestCase):
     def test_resolve_args_from_credentials(self):
         with patch(
             "hermes_cli.auth.shutil.which",
-            return_value="/usr/local/bin/antigravity",
+            return_value="/usr/local/bin/agy",
         ):
             with patch(
                 "hermes_cli.auth._external_process_auth_present",
@@ -87,5 +87,5 @@ class TestAntigravityAcpClientDefaults(unittest.TestCase):
                 assert creds["provider"] == "antigravity-acp"
                 assert creds["api_key"] == "antigravity-acp"
                 assert creds["base_url"] == "acp://antigravity"
-                assert creds["command"] == "/usr/local/bin/antigravity"
-                assert creds["args"] == ["acp"]
+                assert creds["command"] == "/usr/local/bin/agy"
+                assert creds["args"] == ["--acp"]

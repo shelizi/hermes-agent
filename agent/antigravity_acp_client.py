@@ -1,13 +1,15 @@
 """OpenAI-compatible shim that forwards Hermes requests to the Antigravity CLI ACP.
 
 Mirrors :class:`agent.copilot_acp_client.CopilotACPClient` for the Google
-Antigravity CLI ACP mode (JSON-RPC over stdio). Process reuse and per-prompt
-``session/new`` follow the shared ACP client lifecycle (see parent module).
+Antigravity CLI (``agy``) ACP mode (JSON-RPC over stdio). Process reuse and
+per-prompt ``session/new`` follow the shared ACP client lifecycle (see parent
+module).
 
-This is a skeleton provider: command/args and base URL are resolved from env
-vars or the shared credential resolver, matching the Devin/Grok ACP pattern.
-Model and auth binding are left as no-ops until the CLI advertises specific
-ACP methods (e.g. ``session/set_model`` or ``authenticate``).
+The actual binary is ``agy``. As of agy 1.0.16 the native ``--acp`` stdio mode
+is not yet shipped (see google-antigravity/antigravity-cli#31); the default
+argv therefore uses the conventional ``agy --acp`` shape expected by that
+feature. Until then, users can point HERMES_ANTIGRAVITY_ACP_COMMAND at a
+community adapter such as ``agy-acp`` or ``antigravity-acp``.
 
 Duck-typed env overrides:
   HERMES_ANTIGRAVITY_ACP_COMMAND / ANTIGRAVITY_CLI_PATH  -> binary path
@@ -39,22 +41,22 @@ def _resolve_command() -> str:
     try:
         from hermes_cli.auth import _resolve_external_process_command_path
 
-        resolved = _resolve_external_process_command_path(
-            "antigravity-acp", "antigravity"
-        )
+        resolved = _resolve_external_process_command_path("antigravity-acp", "agy")
         if resolved:
             return resolved
     except Exception:
         pass
 
-    return "antigravity"
+    return "agy"
 
 
 def _resolve_args() -> list[str]:
     raw = os.getenv("HERMES_ANTIGRAVITY_ACP_ARGS", "").strip()
     if not raw:
-        # Sensible default for an ``antigravity acp`` ACP entrypoint.
-        return ["acp"]
+        # Expected native ACP entrypoint once google-antigravity/antigravity-cli#31
+        # lands. If you are using the current ``agy`` release (no native ACP),
+        # override this to point at an adapter binary (e.g. ``agy-acp``).
+        return ["--acp"]
     return shlex.split(raw)
 
 
@@ -64,8 +66,8 @@ class AntigravityACPClient(CopilotACPClient):
     _acp_display_name = "Antigravity ACP"
     _default_model_name = "antigravity-acp"
     _install_hint = (
-        "Install Google Antigravity CLI or set "
-        "HERMES_ANTIGRAVITY_ACP_COMMAND/ANTIGRAVITY_CLI_PATH."
+        "Install Google Antigravity CLI (agy) or an ACP adapter (agy-acp), "
+        "or set HERMES_ANTIGRAVITY_ACP_COMMAND/ANTIGRAVITY_CLI_PATH."
     )
 
     def __init__(
