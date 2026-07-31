@@ -1,0 +1,5 @@
+name: codex-acp-provider
+kind: model-provider
+version: 1.0.0
+description: OpenAI Codex CLI via ACP subprocess (codex-acp adapter)
+author: Community

@@ -351,6 +351,8 @@ _PROVIDER_ALIASES = {
     "antigravity-cli": "antigravity-acp",
     "google-antigravity": "antigravity-acp",
     "google-antigravity-cli": "antigravity-acp",
+    "codex-cli": "codex-acp",
+    "openai-codex-acp": "codex-acp",
     "tencent": "tencent-tokenhub",
     "tokenhub": "tencent-tokenhub",
     "tencent-cloud": "tencent-tokenhub",

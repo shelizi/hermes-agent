@@ -99,6 +99,7 @@ DEFAULT_COPILOT_ACP_BASE_URL = "acp://copilot"
 DEFAULT_DEVIN_ACP_BASE_URL = "acp://devin"
 DEFAULT_GROK_ACP_BASE_URL = "acp://grok"
 DEFAULT_ANTIGRAVITY_ACP_BASE_URL = "acp://antigravity"
+DEFAULT_CODEX_ACP_BASE_URL = "acp://codex"
 DEFAULT_OLLAMA_CLOUD_BASE_URL = "https://ollama.com/v1"
 STEPFUN_STEP_PLAN_INTL_BASE_URL = "https://api.stepfun.ai/step_plan/v1"
 STEPFUN_STEP_PLAN_CN_BASE_URL = "https://api.stepfun.com/step_plan/v1"
@@ -255,6 +256,13 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         auth_type="external_process",
         inference_base_url=DEFAULT_ANTIGRAVITY_ACP_BASE_URL,
         base_url_env_var="ANTIGRAVITY_ACP_BASE_URL",
+    ),
+    "codex-acp": ProviderConfig(
+        id="codex-acp",
+        name="OpenAI Codex CLI ACP",
+        auth_type="external_process",
+        inference_base_url=DEFAULT_CODEX_ACP_BASE_URL,
+        base_url_env_var="CODEX_ACP_BASE_URL",
     ),
     "gemini": ProviderConfig(
         id="gemini",
@@ -1925,6 +1933,7 @@ def resolve_provider(
         "grok-cli": "grok-acp", "grok-build": "grok-acp", "xai-grok-cli": "grok-acp",
         "antigravity": "antigravity-acp", "antigravity-cli": "antigravity-acp",
         "google-antigravity": "antigravity-acp", "google-antigravity-cli": "antigravity-acp",
+        "codex-cli": "codex-acp", "openai-codex-acp": "codex-acp",
         "opencode": "opencode-zen", "zen": "opencode-zen",
         "qwen-portal": "qwen-oauth", "qwen-cli": "qwen-oauth", "qwen-oauth": "qwen-oauth",
         "hf": "huggingface", "hugging-face": "huggingface", "huggingface-hub": "huggingface",
@@ -6874,6 +6883,20 @@ def _external_process_spec(provider_id: str) -> Dict[str, Any]:
                 "or set HERMES_ANTIGRAVITY_ACP_COMMAND/ANTIGRAVITY_CLI_PATH."
             ),
         },
+        "codex-acp": {
+            "command_env": ("HERMES_CODEX_ACP_COMMAND", "CODEX_ACP_CLI_PATH"),
+            "default_command": "codex-acp",
+            "args_env": "HERMES_CODEX_ACP_ARGS",
+            # ``codex-acp`` is an ACP server; it needs no launch args.
+            "default_args": [],
+            "api_key": "codex-acp",
+            "missing_code": "missing_codex_acp_cli",
+            "missing_msg": (
+                "Could not find the Codex ACP command '{command}'. "
+                "Install @agentclientprotocol/codex-acp and @openai/codex "
+                "or set HERMES_CODEX_ACP_COMMAND/CODEX_ACP_CLI_PATH."
+            ),
+        },
     }
     return dict(specs.get(provider_id) or specs["copilot-acp"])
 
@@ -6892,7 +6915,8 @@ def _resolve_external_process_command_args(provider_id: str) -> tuple[str, list[
     if raw_args:
         args = shlex.split(raw_args)
     else:
-        args = list(spec.get("default_args") or ["--acp", "--stdio"])
+        default_args = spec.get("default_args")
+        args = list(["--acp", "--stdio"] if default_args is None else default_args)
 
     # Antigravity ACP: adapter binaries (agy-acp, antigravity-acp, etc.) are
     # already in ACP server mode; only the native ``agy`` binary needs the
@@ -6940,6 +6964,25 @@ def _resolve_external_process_command_path(
         for candidate in (
             home / ".antigravity" / "bin" / "agy.exe",
             home / ".antigravity" / "bin" / "agy",
+        ):
+            if candidate.is_file():
+                return str(candidate)
+        return None
+
+    if provider_id == "codex-acp":
+        # Codex ACP adapter is installed via npm. Check the local Hermes-managed
+        # prefix and the per-user npm global prefix.
+        if command_name not in {
+            "codex-acp",
+            "codex-acp.cmd",
+            "codex-acp.exe",
+        }:
+            return None
+        home = Path.home()
+        for candidate in (
+            home / ".hermes" / "codex-acp" / "node_modules" / ".bin" / "codex-acp",
+            home / ".hermes" / "codex-acp" / "node_modules" / ".bin" / "codex-acp.cmd",
+            home / ".npm" / "bin" / "codex-acp",
         ):
             if candidate.is_file():
                 return str(candidate)
@@ -7059,6 +7102,12 @@ def _external_process_auth_present(provider_id: str) -> Optional[bool]:
         return _devin_local_credentials_present()
     if provider_id == "grok-acp":
         return _grok_local_credentials_present()
+    if provider_id == "codex-acp":
+        # Codex ACP adapter uses an explicit API key env var.
+        return bool(
+            os.environ.get("CODEX_API_KEY", "").strip()
+            or os.environ.get("OPENAI_API_KEY", "").strip()
+        )
     # Copilot and Antigravity ACP auth are CLI/session specific; PATH presence
     # is the only cheap signal we have without spawning the binary.
     return None

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-ACP_PROVIDERS = frozenset({"copilot-acp", "devin-acp", "grok-acp", "antigravity-acp"})
+ACP_PROVIDERS = frozenset({"copilot-acp", "devin-acp", "grok-acp", "antigravity-acp", "codex-acp"})
 
 
 def is_acp_provider(provider: str | None = None, base_url: str | None = None) -> bool:
@@ -65,6 +65,11 @@ def create_acp_client(
     p = (provider or "").strip().lower()
     url = (base_url or kwargs.get("base_url") or "").strip().lower()
     client_kwargs = _fill_missing_acp_invocation(p, kwargs)
+
+    if p == "codex-acp" or url.startswith("acp://codex"):
+        from agent.codex_acp_client import CodexACPClient
+
+        return CodexACPClient(base_url=base_url, **client_kwargs)
 
     if p == "antigravity-acp" or url.startswith("acp://antigravity"):
         from agent.antigravity_acp_client import AntigravityACPClient
