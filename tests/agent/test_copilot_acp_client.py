@@ -65,6 +65,65 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
         self.assertEqual(dict(tool_call.function)["name"], "read_file")
         self.assertEqual(choice.message.content, "I'll inspect that.")
 
+    def test_devin_swe_flat_tool_call_is_converted_to_hermes_shape(self) -> None:
+        tool_response = (
+            "I'll queue that.\n"
+            '<tool_call>{"name":"todo_write","arguments":'
+            '{"todos":[{"content":"inspect","status":"in_progress"}]}}'
+            "</tool_call>"
+        )
+
+        with patch.object(
+            self.client, "_run_conversation_prompt", return_value=(tool_response, "")
+        ):
+            response = self.client._create_chat_completion(
+                model="swe-1-7",
+                messages=[{"role": "user", "content": "inspect it"}],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {"name": "todo_write", "parameters": {}},
+                    }
+                ],
+            )
+
+        choice = response.choices[0]
+        self.assertEqual(choice.finish_reason, "tool_calls")
+        self.assertEqual(choice.message.content, "I'll queue that.")
+        self.assertEqual(len(choice.message.tool_calls), 1)
+        tool_call = choice.message.tool_calls[0]
+        self.assertEqual(tool_call.id, "acp_call_1")
+        self.assertEqual(tool_call.function.name, "todo_write")
+        self.assertEqual(
+            json.loads(tool_call.function.arguments),
+            {"todos": [{"content": "inspect", "status": "in_progress"}]},
+        )
+
+    def test_devin_swe_flat_tool_call_respects_hermes_allowlist(self) -> None:
+        tool_response = (
+            "Safe preamble.\n"
+            '<tool_call>{"name":"todo_write","arguments":{"todos":[]}}</tool_call>'
+        )
+
+        with patch.object(
+            self.client, "_run_conversation_prompt", return_value=(tool_response, "")
+        ):
+            response = self.client._create_chat_completion(
+                model="swe-1-7",
+                messages=[{"role": "user", "content": "inspect it"}],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {"name": "read_file", "parameters": {}},
+                    }
+                ],
+            )
+
+        choice = response.choices[0]
+        self.assertEqual(choice.finish_reason, "stop")
+        self.assertEqual(choice.message.tool_calls, [])
+        self.assertEqual(choice.message.content, "Safe preamble.")
+
     def test_stream_true_returns_iterable_text_chunks(self) -> None:
         # Keep the patch active while the generator is consumed — the stream
         # worker thread only runs on iteration.
@@ -169,6 +228,75 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
             {"path": "README.md"},
         )
         self.assertEqual(chunks[1].choices, [])
+
+    def test_stream_suppresses_split_swe_tool_xml_and_emits_structured_call(self) -> None:
+        parts = [
+            "Checking.\n<tool_",
+            'call>{"name":"read_file","arguments":{',
+            '"path":"README.md"}}</tool_',
+            "call>\nContinuing.",
+        ]
+        full_response = "".join(parts)
+
+        def fake_run_conversation_prompt(
+            messages,
+            *,
+            model=None,
+            tools=None,
+            tool_choice=None,
+            timeout_seconds: float = 0,
+            on_text_chunk=None,
+            on_reasoning_chunk=None,
+        ) -> tuple[str, str]:
+            del messages, model, tools, tool_choice, timeout_seconds, on_reasoning_chunk
+            for part in parts:
+                if on_text_chunk is not None:
+                    on_text_chunk(part)
+            return full_response, ""
+
+        with patch.object(
+            self.client,
+            "_run_conversation_prompt",
+            side_effect=fake_run_conversation_prompt,
+        ):
+            chunks = list(
+                self.client._create_chat_completion(
+                    model="swe-1-7",
+                    messages=[{"role": "user", "content": "read README.md"}],
+                    tools=[
+                        {
+                            "type": "function",
+                            "function": {"name": "read_file", "parameters": {}},
+                        }
+                    ],
+                    stream=True,
+                )
+            )
+
+        visible = "".join(
+            chunk.choices[0].delta.content or ""
+            for chunk in chunks
+            if chunk.choices
+        )
+        self.assertEqual(visible, "Checking.\n\nContinuing.")
+        self.assertNotIn("<tool_call>", visible)
+        self.assertNotIn("read_file", visible)
+
+        tool_chunks = [
+            chunk
+            for chunk in chunks
+            if chunk.choices and chunk.choices[0].delta.tool_calls
+        ]
+        self.assertEqual(len(tool_chunks), 1)
+        terminal = tool_chunks[0]
+        self.assertEqual(terminal.choices[0].finish_reason, "tool_calls")
+        self.assertIsNone(terminal.choices[0].delta.content)
+        tool_delta = terminal.choices[0].delta.tool_calls[0]
+        self.assertEqual(tool_delta.function.name, "read_file")
+        self.assertEqual(
+            json.loads(tool_delta.function.arguments),
+            {"path": "README.md"},
+        )
 
     def test_timeout_object_is_coerced_for_streaming_requests(self) -> None:
         captured: dict[str, float] = {}

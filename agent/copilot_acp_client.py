@@ -84,8 +84,88 @@ def _acp_session_reuse_enabled() -> bool:
         return True
     return _acp_process_reuse_enabled()
 
-_TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+
+_TOOL_CALL_OPEN = "<tool_call>"
+_TOOL_CALL_CLOSE = "</tool_call>"
+_TOOL_CALL_BLOCK_RE = re.compile(
+    r"<tool_call\b[^>]*>\s*(.*?)\s*</tool_call\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+_TOOL_CALL_OPEN_RE = re.compile(r"<tool_call\b[^>]*>", re.IGNORECASE)
 _TOOL_CALL_JSON_RE = re.compile(r"\{\s*\"id\"\s*:\s*\"[^\"]+\"\s*,\s*\"type\"\s*:\s*\"function\"\s*,\s*\"function\"\s*:\s*\{.*?\}\s*\}", re.DOTALL)
+
+
+def _marker_prefix_suffix_length(text: str, marker: str) -> int:
+    """Length of the longest suffix of ``text`` that prefixes ``marker``."""
+    text_lower = text.lower()
+    marker_lower = marker.lower()
+    for size in range(min(len(text), len(marker) - 1), 0, -1):
+        if text_lower.endswith(marker_lower[:size]):
+            return size
+    return 0
+
+
+class _ToolCallStreamFilter:
+    """Suppress textual ``<tool_call>`` blocks without delaying normal text.
+
+    ACP providers stream arbitrary chunk boundaries, so both the opening and
+    closing tags may be split across updates. The filter retains only the
+    short suffix needed to recognize a split marker and discards tool payload
+    bytes as they arrive. The completed response is parsed separately into
+    structured OpenAI/Hermes ``tool_calls``.
+    """
+
+    def __init__(self) -> None:
+        self._pending = ""
+        self._inside_tool_call = False
+
+    def feed(self, chunk: str) -> str:
+        if not isinstance(chunk, str) or not chunk:
+            return ""
+        self._pending += chunk
+        visible: list[str] = []
+
+        while self._pending:
+            pending_lower = self._pending.lower()
+            if self._inside_tool_call:
+                close_at = pending_lower.find(_TOOL_CALL_CLOSE)
+                if close_at >= 0:
+                    self._pending = self._pending[close_at + len(_TOOL_CALL_CLOSE):]
+                    self._inside_tool_call = False
+                    continue
+
+                keep = _marker_prefix_suffix_length(self._pending, _TOOL_CALL_CLOSE)
+                self._pending = self._pending[-keep:] if keep else ""
+                break
+
+            open_at = pending_lower.find(_TOOL_CALL_OPEN)
+            if open_at >= 0:
+                if open_at:
+                    visible.append(self._pending[:open_at])
+                self._pending = self._pending[open_at + len(_TOOL_CALL_OPEN):]
+                self._inside_tool_call = True
+                continue
+
+            keep = _marker_prefix_suffix_length(self._pending, _TOOL_CALL_OPEN)
+            if keep:
+                visible.append(self._pending[:-keep])
+                self._pending = self._pending[-keep:]
+            else:
+                visible.append(self._pending)
+                self._pending = ""
+            break
+
+        return "".join(visible)
+
+    def finish(self) -> str:
+        """Flush ordinary pending text; discard an unterminated tool block."""
+        if self._inside_tool_call:
+            self._pending = ""
+            return ""
+        tail = self._pending
+        self._pending = ""
+        return tail
+
 
 # Stderr fingerprint of the deprecated `gh copilot` CLI extension
 # (https://github.blog/changelog/2025-09-25-upcoming-deprecation-of-gh-copilot-cli-extension).
@@ -933,7 +1013,30 @@ def _completion_to_stream_chunks(completion: SimpleNamespace) -> list[SimpleName
     return [data_chunk, usage_chunk]
 
 
-def _extract_tool_calls_from_text(text: str) -> tuple[list[ChatCompletionMessageToolCall], str]:
+def _tool_names_from_schemas(
+    tools: list[dict[str, Any]] | None,
+) -> set[str] | None:
+    """Return the exact tool-name allowlist, or None when unrestricted."""
+    if tools is None:
+        return None
+    names: set[str] = set()
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if isinstance(name, str) and name.strip():
+            names.add(name.strip())
+    return names
+
+
+def _extract_tool_calls_from_text(
+    text: str,
+    *,
+    allowed_tool_names: set[str] | None = None,
+) -> tuple[list[ChatCompletionMessageToolCall], str]:
     if not isinstance(text, str) or not text.strip():
         return [], ""
 
@@ -947,13 +1050,28 @@ def _extract_tool_calls_from_text(text: str) -> tuple[list[ChatCompletionMessage
             return
         if not isinstance(obj, dict):
             return
+
+        # OpenAI nested shape and Devin SWE 1.7 compact shape.
         fn = obj.get("function")
-        if not isinstance(fn, dict):
-            return
-        fn_name = fn.get("name")
+        if isinstance(fn, dict):
+            fn_name = fn.get("name")
+            fn_args = fn.get("arguments", "{}")
+        else:
+            fn_name = obj.get("name")
+            fn_args = obj.get("arguments", {})
+
         if not isinstance(fn_name, str) or not fn_name.strip():
             return
-        fn_args = fn.get("arguments", "{}")
+        fn_name = fn_name.strip()
+        if allowed_tool_names is not None and fn_name not in allowed_tool_names:
+            logger.warning(
+                "ACP textual tool call ignored because tool is not allowed: %s",
+                fn_name,
+            )
+            return
+
+        if fn_args is None:
+            fn_args = {}
         if not isinstance(fn_args, str):
             fn_args = json.dumps(fn_args, ensure_ascii=False)
         call_id = obj.get("id")
@@ -963,22 +1081,27 @@ def _extract_tool_calls_from_text(text: str) -> tuple[list[ChatCompletionMessage
         extracted.append(
             _build_openai_tool_call(
                 call_id=call_id,
-                name=fn_name.strip(),
+                name=fn_name,
                 arguments=fn_args,
             )
         )
 
     for m in _TOOL_CALL_BLOCK_RE.finditer(text):
-        raw = m.group(1)
-        _try_add_tool_call(raw)
+        _try_add_tool_call(m.group(1))
         consumed_spans.append((m.start(), m.end()))
 
-    # Only try bare-JSON fallback when no XML blocks were found.
-    if not extracted:
+    # Only try bare OpenAI JSON fallback when no XML tool blocks were found.
+    if not consumed_spans:
         for m in _TOOL_CALL_JSON_RE.finditer(text):
-            raw = m.group(0)
-            _try_add_tool_call(raw)
+            _try_add_tool_call(m.group(0))
             consumed_spans.append((m.start(), m.end()))
+
+    # Suppress a truncated model control block through end-of-text.
+    for m in _TOOL_CALL_OPEN_RE.finditer(text):
+        if any(start <= m.start() < end for start, end in consumed_spans):
+            continue
+        consumed_spans.append((m.start(), len(text)))
+        break
 
     if not consumed_spans:
         return extracted, text.strip()
@@ -1002,7 +1125,6 @@ def _extract_tool_calls_from_text(text: str) -> tuple[list[ChatCompletionMessage
 
     cleaned = "\n".join(p.strip() for p in parts if p and p.strip()).strip()
     return extracted, cleaned
-
 
 
 def _ensure_path_within_cwd(path_text: str, cwd: str) -> Path:
@@ -1284,15 +1406,25 @@ class CopilotACPClient:
             tool_choice=tool_choice,
             timeout_seconds=_effective_timeout,
         )
-        return self._build_completion(response_text, reasoning_text, model_name)
+        return self._build_completion(
+            response_text,
+            reasoning_text,
+            model_name,
+            tools=tools,
+        )
 
     def _build_completion(
         self,
         response_text: str,
         reasoning_text: str,
         model_name: str,
+        *,
+        tools: list[dict[str, Any]] | None = None,
     ) -> SimpleNamespace:
-        tool_calls, cleaned_text = _extract_tool_calls_from_text(response_text)
+        tool_calls, cleaned_text = _extract_tool_calls_from_text(
+            response_text,
+            allowed_tool_names=_tool_names_from_schemas(tools),
+        )
         usage = SimpleNamespace(
             prompt_tokens=0,
             completion_tokens=0,
@@ -1325,9 +1457,12 @@ class CopilotACPClient:
     ):
         """Yield OpenAI-style stream chunks as ACP ``agent_message_chunk`` arrives."""
         events: queue.Queue[tuple[str, Any]] = queue.Queue()
+        tool_call_filter = _ToolCallStreamFilter()
 
         def _on_text(chunk: str) -> None:
-            events.put(("text", chunk))
+            visible = tool_call_filter.feed(chunk)
+            if visible:
+                events.put(("text", visible))
 
         def _on_reasoning(chunk: str) -> None:
             events.put(("reasoning", chunk))
@@ -1385,12 +1520,29 @@ class CopilotACPClient:
                 raise payload
             elif kind == "done":
                 text, reasoning = payload
-                completion = self._build_completion(text, reasoning or "", model)
-                # Emit terminal tool-call / finish frames (tool calls are only
-                # known after the full ACP text is assembled).
+                tail = tool_call_filter.finish()
+                if tail:
+                    delta = SimpleNamespace(
+                        role="assistant" if not role_sent else None,
+                        content=tail,
+                        tool_calls=None,
+                        reasoning=None,
+                        reasoning_content=None,
+                    )
+                    role_sent = True
+                    yield SimpleNamespace(
+                        choices=[SimpleNamespace(index=0, delta=delta, finish_reason=None)],
+                        model=model,
+                        usage=None,
+                    )
+                completion = self._build_completion(
+                    text,
+                    reasoning or "",
+                    model,
+                    tools=tools,
+                )
+                # Emit terminal tool-call / finish frames after full parsing.
                 for chunk in _completion_to_stream_chunks(completion):
-                    # Skip the bulk content frame if we already streamed tokens
-                    # — only keep tool_call + finish + usage frames.
                     choice0 = chunk.choices[0] if chunk.choices else None
                     delta = getattr(choice0, "delta", None) if choice0 else None
                     content = getattr(delta, "content", None) if delta else None
@@ -1398,8 +1550,8 @@ class CopilotACPClient:
                     finish = getattr(choice0, "finish_reason", None) if choice0 else None
                     if content and not tool_calls and not finish and role_sent:
                         continue
-                    if content and role_sent and not tool_calls:
-                        # Strip already-streamed content from the finish frame.
+                    if content and role_sent:
+                        # Every visible byte was already emitted by the filter.
                         if delta is not None:
                             delta.content = None
                     yield chunk
