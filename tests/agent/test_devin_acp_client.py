@@ -193,6 +193,27 @@ class TestDevinAcpClientDefaults(unittest.TestCase):
         assert any("Reading config" in (e[2] or "") for e in events)
         assert any("Devin" in s or "ACP" in s or "Copilot" in s for s in statuses)
 
+    def test_tool_preview_strips_terminal_escape_sequences(self):
+        from agent.copilot_acp_client import _tool_update_text_preview
+
+        preview = _tool_update_text_preview(
+            {
+                "title": "Ran command",
+                "content": [
+                    {
+                        "type": "content",
+                        "content": {
+                            "type": "text",
+                            "text": "\x1b[32;1mName\x1b[0m\n\x00result.txt",
+                        },
+                    }
+                ],
+            }
+        )
+
+        assert preview == "Ran command: Name\nresult.txt"
+        assert "\x1b" not in preview
+
     def test_permission_auto_selects_allow(self):
         from agent.copilot_acp_client import _permission_auto_selected
 

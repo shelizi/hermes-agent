@@ -43,6 +43,7 @@ from openai.types.chat.chat_completion_message_tool_call import (
 from agent.file_safety import get_read_block_error, get_write_denied_error
 from agent.redact import redact_sensitive_text
 from hermes_cli._subprocess_compat import windows_hide_flags
+from tools.ansi_strip import sanitize_display_text
 from tools.environments.local import hermes_subprocess_env
 
 logger = logging.getLogger(__name__)
@@ -388,6 +389,10 @@ def _tool_update_text_preview(update: dict[str, Any], *, limit: int = 240) -> st
         preview = f"{title}: {body}"
     else:
         preview = title or body or "ACP tool"
+    # ACP tool content is subprocess/terminal output.  Strip ECMA-48 styling
+    # and control bytes before it reaches a Desktop status strip or an opted-in
+    # gateway progress bubble (PowerShell commonly emits these around tables).
+    preview = sanitize_display_text(preview).strip()
     if len(preview) > limit:
         return preview[: limit - 1] + "…"
     return preview

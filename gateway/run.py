@@ -122,6 +122,17 @@ _TELEGRAM_NOISY_STATUS_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# ACP backends publish every native tool notification through two rails:
+# ``tool_progress_callback`` (the configurable gateway progress UI) and a
+# lifecycle status used by Desktop/TUI status strips.  The latter must stay
+# transient on messaging surfaces; otherwise it bypasses ``tool_progress``
+# entirely and turns one Devin/Copilot/Grok command into one permanent chat
+# message per pending/update/completed notification.
+_ACP_TOOL_LIFECYCLE_STATUS_RE = re.compile(
+    r"^(?:Copilot|Devin|Grok|Antigravity|Codex)\s+ACP\s+(?:\.\.\.|done)\s+.+$",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 def _status_template_to_regex(template: str) -> str:
     """Compile a compression status template constant into a regex source.
@@ -629,6 +640,11 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
         return text
 
     text = _redact_gateway_user_facing_secrets(text)
+    if event_type == "lifecycle" and _ACP_TOOL_LIFECYCLE_STATUS_RE.match(text):
+        # The same update already reached ``tool_progress_callback``.  Keep
+        # chat delivery governed by display.tool_progress while preserving
+        # this status line on local/Desktop/TUI surfaces.
+        return None
     if _TELEGRAM_NOISY_STATUS_RE.search(text):
         # Opt-in #52995: `compression.progress_notices: true` lets ROUTINE
         # compression progress statuses through to chat platforms. The

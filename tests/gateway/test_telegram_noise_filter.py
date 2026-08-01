@@ -142,6 +142,40 @@ def test_programmatic_surfaces_keep_raw_status():
         )
 
 
+@pytest.mark.parametrize("platform", CHAT_PLATFORMS)
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Devin ACP ... Ran command: command=Get-ChildItem",
+        "Devin ACP done Ran command: Directory: E:\\work",
+        "Copilot ACP ... Read file",
+        "Grok ACP done Searched web for Hermes",
+        "Antigravity ACP ... ACP tool",
+        "Codex ACP done Wrote C:\\tmp\\result.txt",
+    ],
+)
+def test_chat_gateways_drop_acp_tool_lifecycle_status(platform, message):
+    """ACP status-strip updates must not bypass display.tool_progress in chat."""
+    assert _prepare_gateway_status_message(platform, "lifecycle", message) is None
+
+
+def test_programmatic_surfaces_keep_acp_tool_lifecycle_status():
+    """Desktop/TUI/local status strips retain ACP activity updates."""
+    message = "Devin ACP ... Ran command: command=Get-ChildItem"
+
+    for platform in ("local", "api_server", "webhook", "msgraph_webhook"):
+        assert (
+            _prepare_gateway_status_message(platform, "lifecycle", message) == message
+        )
+
+
+def test_non_acp_lifecycle_status_remains_visible():
+    """The ACP filter is narrow and does not swallow ordinary lifecycle notices."""
+    message = "Devin sync done — 12 files indexed"
+
+    assert _prepare_gateway_status_message("telegram", "lifecycle", message) == message
+
+
 @pytest.mark.parametrize("message", ["still on it", "⏳ Working — 3 min"])
 def test_telegram_status_keeps_legitimate_heartbeat_messages(message):
     """The compression filter must not swallow user-facing work heartbeats."""
