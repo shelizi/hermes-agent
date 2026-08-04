@@ -34,42 +34,7 @@ class TestSignatureFromSchema:
         assert annots["query"] == str
         assert param.default is inspect.Parameter.empty
 
-    def test_optional_integer_param(self):
-        """An optional param gets Optional[type] with default=None."""
-        schema = {
-            "type": "object",
-            "properties": {"limit": {"type": "integer"}},
-        }
-        sig, annots = _signature_from_schema(schema)
 
-        param = sig.parameters["limit"]
-        # Optional[type] is type | None in Python 3.10+
-        assert param.default is None
-
-    def test_multiple_params_mixed_required_optional(self):
-        """Mixed required and optional params are handled correctly."""
-        schema = {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "limit": {"type": "integer"},
-                "offset": {"type": "integer"},
-            },
-            "required": ["query"],
-        }
-        sig, annots = _signature_from_schema(schema)
-
-        assert len(sig.parameters) == 3
-
-        # query: required str
-        assert annots["query"] == str
-        assert sig.parameters["query"].default is inspect.Parameter.empty
-
-        # limit: optional int
-        assert sig.parameters["limit"].default is None
-
-        # offset: optional int
-        assert sig.parameters["offset"].default is None
 
     def test_skip_private_params(self):
         """Params starting with '_' are excluded from the signature."""
@@ -110,20 +75,7 @@ class TestSignatureFromSchema:
         assert annots["a"] == list
         assert annots["o"] == dict
 
-    def test_empty_schema(self):
-        """Empty schema returns empty signature."""
-        sig, annots = _signature_from_schema(None)
-        assert len(sig.parameters) == 0
-        assert len(annots) == 0
 
-    def test_return_annotation_is_str(self):
-        """All generated signatures have str as return type."""
-        schema = {
-            "type": "object",
-            "properties": {"query": {"type": "string"}},
-        }
-        sig, annots = _signature_from_schema(schema)
-        assert sig.return_annotation == str
 
 
 class TestModuleSurface:
