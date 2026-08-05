@@ -325,11 +325,21 @@ class TestDevinAcpClientDefaults(unittest.TestCase):
             "session_search",
         }
 
-    def test_native_mcp_tools_are_not_duplicated_in_text_prompt(self):
+    def test_mcp_tools_are_conditionally_duplicated_in_text_prompt(self):
         client = DevinACPClient(acp_cwd="/tmp", command="devin", args=["acp"])
         tools = [{"type": "function", "function": {"name": "skill_view"}}]
 
+        # Unknown/placeholder model (e.g. GLM) relies on native MCP only.
         assert client._prompt_tools(tools) is None
+
+        # SWE-1.7 emits textual <tool_call> blocks and needs prompt schemas.
+        client._desired_process_model = "swe-1.7"
+        assert client._prompt_tools(tools) is tools
+
+        # ACP session value is also recognized once the session reports it.
+        client._desired_process_model = None
+        client._session_model_value = "swe-1-7"
+        assert client._prompt_tools(tools) is tools
 
     def test_native_mcp_bridge_exposes_all_tools_without_prompt_schema(self):
         client = DevinACPClient(acp_cwd="/tmp", command="devin", args=["acp"])
@@ -535,6 +545,74 @@ class TestAcpToolLoopSession(unittest.TestCase):
         methods = [w.get("method") for w in procs[0].writes]
         assert methods.count("session/new") == 1
         assert methods.count("session/prompt") == 2
+
+    def test_swe_session_reuse_includes_tool_schemas_in_continuation_prompt(self):
+        """SWE-1.7 needs tool specs in continuation prompts for correct calls.
+
+        Regression for: Telegram + SWE-1.7 Devin ACP responds once then stops.
+        When the model family is SWE, _prompt_tools must return the tool list
+        so _format_messages_as_prompt embeds schemas in both the initial and
+        continuation prompts.
+        """
+        from agent.devin_acp_client import DevinACPClient
+
+        procs: list[_ScriptedAcpProcess] = []
+
+        def _popen(*_a, **_k):
+            proc = _ScriptedAcpProcess()
+            procs.append(proc)
+            return proc
+
+        with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+            client = DevinACPClient(
+                command="fake-acp",
+                args=["acp"],
+                acp_cwd="/tmp",
+            )
+            client._reuse_enabled = True
+            client._session_reuse_enabled = True
+
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+            r1 = client._create_chat_completion(
+                model="swe-1.7",
+                messages=[{"role": "user", "content": "read a.txt"}],
+                tools=tools,
+                timeout=5,
+            )
+            assert r1.choices[0].message.content == "ok-1"
+
+            r2 = client._create_chat_completion(
+                model="swe-1.7",
+                messages=[
+                    {"role": "user", "content": "read a.txt"},
+                    {"role": "assistant", "content": r1.choices[0].message.content},
+                    {"role": "user", "content": "follow up"},
+                ],
+                tools=tools,
+                timeout=5,
+            )
+            client.close()
+
+        assert r2.choices[0].message.content == "ok-1"
+        assert client._session_model_value == "swe-1-7"
+
+        # Second prompt must contain the tool schema (continuation prompt too).
+        prompt_bodies = [
+            w["params"]["prompt"][0]["text"]
+            for w in procs[0].writes
+            if w.get("method") == "session/prompt"
+        ]
+        assert len(prompt_bodies) == 2
+        assert "read_file" in prompt_bodies[1]
+        assert "New messages:" in prompt_bodies[1]
 
 
 class TestDevinDesktopUiSupport(unittest.TestCase):

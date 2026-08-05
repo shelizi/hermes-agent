@@ -277,16 +277,20 @@ class DevinACPClient(CopilotACPClient):
 
         return servers
 
-    def _prompt_tools(self, tools: list[dict[str, Any]] | None) -> None:
-        """Use Devin's native MCP tools instead of textual XML tool calls.
+    def _prompt_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        """Return tools to describe in the textual ACP prompt.
 
-        Some Devin models (notably GLM) emit reasoning-only responses when an
-        OpenAI function schema is duplicated in the user prompt. The MCP
-        servers supplied at session setup already publish the authoritative
-        tool schemas to Devin, so keeping a second textual tool protocol only
-        creates a competing interface.
+        SWE-1.7 and Devin models that emit textual ``<tool_call>`` blocks need
+        the OpenAI function schemas in the prompt so their calls match the
+        Hermes allow-list. GLM-style models are confused by duplicated textual
+        schemas and should rely on native MCP only.
         """
-        del tools
+        # Prefer the model requested for this turn; if the user selected the
+        # ``devin-acp`` placeholder, fall back to the ACP session model value
+        # (e.g. swe-1-7) reported by the active session.
+        model = (self._desired_process_model or self._session_model_value or "").lower()
+        if "swe" in model:
+            return tools
         return None
 
     def _spawn_process(self):
