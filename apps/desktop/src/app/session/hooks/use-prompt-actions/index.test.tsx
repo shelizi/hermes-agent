@@ -485,8 +485,12 @@ describe('usePromptActions /wake', () => {
 
     await handle!.submitText('/wake on')
 
-    expect(requestGateway).toHaveBeenCalledWith('wake.start', { persist: true, surface: 'gui' }, 180_000)
-    expect(requestGateway).toHaveBeenCalledWith('wake.status', {})
+    expect(requestGateway).toHaveBeenCalledWith(
+      'wake.start',
+      { client_capture: true, persist: true, surface: 'gui' },
+      180_000
+    )
+    expect(requestGateway).toHaveBeenCalledWith('wake.status', { client_capture: true, surface: 'gui' })
     expect(requestGateway).not.toHaveBeenCalledWith('slash.exec', expect.anything())
     expect(requestGateway).not.toHaveBeenCalledWith('command.dispatch', expect.anything())
     expect($wakeWord.get()).toMatchObject({ available: true, enabled: true, listening: true })
@@ -2290,6 +2294,7 @@ describe('usePromptActions restoreToMessage', () => {
       {
         session_id: RUNTIME_SESSION_ID,
         text: 'first prompt',
+        confirm_truncate: true,
         truncate_before_user_ordinal: 0,
         confirm_empty_truncate: true
       },
@@ -2358,6 +2363,7 @@ describe('usePromptActions restoreToMessage', () => {
       {
         session_id: RUNTIME_SESSION_ID,
         text: 'first prompt',
+        confirm_truncate: true,
         truncate_before_user_ordinal: 0,
         confirm_empty_truncate: true
       },
@@ -2404,6 +2410,7 @@ describe('usePromptActions restoreToMessage', () => {
       {
         session_id: RUNTIME_SESSION_ID,
         text: 'first prompt',
+        confirm_truncate: true,
         truncate_before_user_ordinal: 0,
         confirm_empty_truncate: true
       },
