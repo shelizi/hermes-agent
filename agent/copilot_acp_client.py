@@ -40,7 +40,7 @@ from openai.types.chat.chat_completion_message_tool_call import (
     Function,
 )
 
-from agent.file_safety import get_read_block_error, get_write_denied_error
+from agent.file_safety import get_read_block_error, get_write_denied_error, is_write_approval_required
 from agent.redact import redact_sensitive_text
 from hermes_cli._subprocess_compat import windows_hide_flags
 from tools.ansi_strip import sanitize_display_text
@@ -2164,6 +2164,14 @@ class CopilotACPClient:
                 denied = get_write_denied_error(str(path))
                 if denied:
                     raise PermissionError(denied)
+                # Approval-gated paths (e.g. ~/.ssh/config) are not hard-denied
+                # for interactive tools, but the ACP shim has no human channel
+                # to confirm the write — fail closed here.
+                if is_write_approval_required(str(path)):
+                    raise PermissionError(
+                        f"Write denied: '{path}' requires interactive approval "
+                        "and cannot be written through the ACP file bridge."
+                    )
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(str(params.get("content") or ""), encoding="utf-8")
                 response = {
