@@ -47,6 +47,7 @@ copilot_acp = CopilotACPProfile(
             "Install GitHub Copilot CLI or set HERMES_COPILOT_ACP_COMMAND/COPILOT_CLI_PATH."
         ),
     },
+    fallback_models=("copilot-acp",),
 )
 
 register_provider(copilot_acp)

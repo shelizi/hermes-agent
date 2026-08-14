@@ -27,6 +27,15 @@ class GrokACPProfile(ProviderProfile):
         """Model listing is handled by the ACP subprocess or hermes_cli.models."""
         return None
 
+    def auth_present(self) -> bool | None:
+        """Grok CLI uses XAI_API_KEY or ~/.grok/auth.json."""
+        try:
+            from hermes_cli.auth import _grok_local_credentials_present
+
+            return _grok_local_credentials_present()
+        except Exception:
+            return None
+
 
 grok_acp = GrokACPProfile(
     name="grok-acp",
@@ -56,6 +65,19 @@ grok_acp = GrokACPProfile(
         ),
         "login_hint": "Grok CLI found but no local credentials — run: grok login or set XAI_API_KEY",
     },
+    fallback_models=(
+        "grok-4.5",
+        "grok-composer-2.5-fast",
+        "grok-build-0.1",
+        "grok-4.3",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-multi-agent-0309",
+        "grok-3-mini",
+        "grok-3-mini-fast",
+        # Hermes placeholder when no specific model is chosen
+        "grok-acp",
+    ),
 )
 
 register_provider(grok_acp)

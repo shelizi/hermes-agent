@@ -60,6 +60,13 @@ class ProviderProfile:
     # lets new external-process providers register without touching auth.py.
     process_spec: dict | None = None
 
+    # Auth presence hook for external-process providers. Return True/False when
+    # local credentials can be probed, or None if unknown (default). Providers
+    # that ship as plugins can override this so auth.py stays generic.
+    def auth_present(self) -> bool | None:
+        """Return True/False when local credentials are present; None if unknown."""
+        return None
+
     supports_health_check: bool = True  # False → doctor skips /models probe for this provider
 
     # ── Vision support ────────────────────────────────────────

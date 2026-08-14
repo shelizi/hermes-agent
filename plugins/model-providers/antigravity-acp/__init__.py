@@ -52,6 +52,7 @@ antigravity_acp = AntigravityACPProfile(
             "or set HERMES_ANTIGRAVITY_ACP_COMMAND/ANTIGRAVITY_CLI_PATH."
         ),
     },
+    fallback_models=("antigravity-acp",),
 )
 
 register_provider(antigravity_acp)

@@ -5,6 +5,8 @@ chat-completions endpoint. Routing is handled by CodexACPClient, same pattern
 as copilot-acp, devin-acp, grok-acp and antigravity-acp.
 """
 
+import os
+
 from providers import register_provider
 from providers.base import ProviderProfile
 
@@ -21,6 +23,13 @@ class CodexACPProfile(ProviderProfile):
     ) -> list[str] | None:
         """Model listing is handled by the ACP subprocess or hermes_cli.models."""
         return None
+
+    def auth_present(self) -> bool | None:
+        """Codex ACP adapter uses an explicit API key env var."""
+        return bool(
+            os.environ.get("CODEX_API_KEY", "").strip()
+            or os.environ.get("OPENAI_API_KEY", "").strip()
+        )
 
 
 codex_acp = CodexACPProfile(
@@ -50,6 +59,7 @@ codex_acp = CodexACPProfile(
             "or set HERMES_CODEX_ACP_COMMAND/CODEX_ACP_CLI_PATH."
         ),
     },
+    fallback_models=("codex-acp",),
 )
 
 register_provider(codex_acp)

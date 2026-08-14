@@ -416,67 +416,10 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "claude-sonnet-4-20250514",
         "claude-haiku-4-5-20251001",
     ],
-    # Snapshot of `devin --model <invalid> -p .` "Available:" list (offline
-    # fallback). Live discovery via fetch_devin_cli_models() preferred when
-    # the Devin CLI is installed. Short family aliases (opus/sonnet/…) are
-    # documented by Cognition and resolve to the latest in-family model.
-    "devin-acp": [
-        "adaptive",
-        "swe-1.7",
-        "swe-1.7-lightning",
-        "swe-1.6",
-        "swe-1.6-fast",
-        "swe-1.5",
-        "claude-opus-4.8",
-        "claude-opus-4.7",
-        "claude-opus-4.5",
-        "claude-sonnet-5",
-        "claude-sonnet-4.6",
-        "claude-sonnet-4.5",
-        "claude-fable-5",
-        "claude-haiku-4.5",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.3-codex",
-        "gpt-5.2",
-        "gemini-3.5-flash",
-        "gemini-3.1-pro",
-        "gemini-3-flash",
-        "grok-4.5",
-        "deepseek-v4-pro",
-        "kimi-k2.7",
-        "kimi-k2.6",
-        "glm-5.2",
-        "nemotron-3-ultra",
-        # Family aliases (docs: always resolve to latest in family)
-        "opus",
-        "sonnet",
-        "swe",
-        "codex",
-        "gemini",
-        # Hermes placeholder when no specific model is chosen
-        "devin-acp",
-    ],
-    # Snapshot of `grok models` "Available models:" list (offline fallback).
-    # Live discovery via fetch_grok_cli_models() preferred when the Grok CLI is
-    # installed and authenticated.
-    "grok-acp": [
-        "grok-4.5",
-        "grok-composer-2.5-fast",
-        "grok-build-0.1",
-        "grok-4.3",
-        "grok-4.20-0309-reasoning",
-        "grok-4.20-0309-non-reasoning",
-        "grok-4.20-multi-agent-0309",
-        "grok-3-mini",
-        "grok-3-mini-fast",
-        # Hermes placeholder when no specific model is chosen
-        "grok-acp",
-    ],
+    # Model lists for external-process ACP providers (devin-acp, grok-acp,
+    # antigravity-acp, codex-acp) are populated from their plugin
+    # ProviderProfile.fallback_models so that hermes_cli.models.py stays close
+    # to main and new ACP providers do not require edits here.
     "deepseek": [
         "deepseek-v4-pro",
         "deepseek-v4-flash",
@@ -683,6 +626,21 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
 # and the static fallback catalog (bare ids) stay in sync from a single
 # source of truth.
 _PROVIDER_MODELS["ai-gateway"] = [mid for mid, _ in VERCEL_AI_GATEWAY_MODELS]
+
+# Auto-extend the static model catalog with fallback_models declared by
+# provider plugins. This lets external-process ACP providers (devin-acp,
+# grok-acp, antigravity-acp, codex-acp) carry their own model lists instead of
+# editing this file.
+try:
+    from providers import list_providers as _list_providers_for_models
+
+    for _pp in _list_providers_for_models():
+        if _pp.name in _PROVIDER_MODELS:
+            continue
+        if _pp.fallback_models:
+            _PROVIDER_MODELS[_pp.name] = list(_pp.fallback_models)
+except Exception:
+    pass
 
 # ---------------------------------------------------------------------------
 # Nous Portal free-model helper

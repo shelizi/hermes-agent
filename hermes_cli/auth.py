@@ -7306,19 +7306,20 @@ def _grok_local_credentials_present() -> bool:
 
 
 def _external_process_auth_present(provider_id: str) -> Optional[bool]:
-    """Return True/False when local auth can be probed; None if unknown."""
-    if provider_id == "devin-acp":
-        return _devin_local_credentials_present()
-    if provider_id == "grok-acp":
-        return _grok_local_credentials_present()
-    if provider_id == "codex-acp":
-        # Codex ACP adapter uses an explicit API key env var.
-        return bool(
-            os.environ.get("CODEX_API_KEY", "").strip()
-            or os.environ.get("OPENAI_API_KEY", "").strip()
-        )
-    # Copilot and Antigravity ACP auth are CLI/session specific; PATH presence
-    # is the only cheap signal we have without spawning the binary.
+    """Return True/False when local auth can be probed; None if unknown.
+
+    Provider-specific probes live in the provider's
+    ``ProviderProfile.auth_present()`` hook so auth.py stays generic.
+    """
+    try:
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(provider_id)
+        if profile:
+            return profile.auth_present()
+    except Exception:
+        pass
+    # No profile or hook → unknown.
     return None
 
 
