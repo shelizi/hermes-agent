@@ -9794,62 +9794,64 @@ def _claude_code_only_status() -> Dict[str, Any]:
     return {"logged_in": False, "source": None}
 
 
-def _copilot_acp_status() -> Dict[str, Any]:
-    """Status for copilot-acp — credentials are owned by the Copilot CLI.
+def _external_process_status(
+    provider_id: str, *, source_slug: Optional[str] = None
+) -> Dict[str, Any]:
+    """Generic status for an external-process (ACP/MCP-style) provider.
 
-    There is no cheap programmatic credential probe for the ACP subprocess, so
-    this is a read-only "managed by the Copilot CLI" card (like claude-code):
-    Hermes never claims a login state it can't verify.
+    Providers that cannot probe local credentials (``auth_present`` returns
+    ``None``) get a read-only "Managed by the X CLI" card so the web UI never
+    claims a login state it cannot verify.  Providers with a cheap probe get
+    the full CLI-installed / auth-detected / hint status.
     """
-    return {
-        "logged_in": False,
-        "source": "copilot_cli",
-        "source_label": "Managed by the GitHub Copilot CLI",
-        "token_preview": None,
-        "expires_at": None,
-        "has_refresh_token": False,
-    }
+    from hermes_cli.auth import (
+        PROVIDER_REGISTRY,
+        get_external_process_provider_status,
+    )
+    from providers import get_provider_profile
 
+    pconfig = PROVIDER_REGISTRY.get(provider_id)
+    name = pconfig.name if pconfig else provider_id
+    source = source_slug or provider_id.replace("-acp", "_cli")
 
-def _devin_acp_status() -> Dict[str, Any]:
-    """Status for devin-acp — CLI binary + local credentials file probe.
+    profile = get_provider_profile(provider_id)
+    if profile is None or profile.auth_present() is None:
+        return {
+            "logged_in": False,
+            "source": source,
+            "source_label": f"Managed by the {name}",
+            "token_preview": None,
+            "expires_at": None,
+            "has_refresh_token": False,
+        }
 
-    Unlike copilot-acp, Devin stores a credentials.toml we can detect without
-    spawning the binary or minting network tokens. Never expose secret values.
-    """
     try:
-        from hermes_cli.auth import get_external_process_provider_status
-
-        raw = get_external_process_provider_status("devin-acp")
+        raw = get_external_process_provider_status(provider_id)
     except Exception as exc:
         return {
             "logged_in": False,
-            "source": "devin_cli",
-            "source_label": "Managed by the Devin CLI",
+            "source": source,
+            "source_label": f"Managed by the {name}",
             "token_preview": None,
             "expires_at": None,
             "has_refresh_token": False,
             "error": str(exc),
         }
 
-    resolved = raw.get("resolved_command") or raw.get("command") or "devin"
-    parts = ["Managed by the Devin CLI"]
+    resolved = raw.get("resolved_command") or raw.get("command") or ""
+    parts = [f"Managed by the {name}"]
     if raw.get("resolved_command"):
         parts.append(str(raw["resolved_command"]))
     elif raw.get("cli_installed") is False:
         parts.append("CLI not found on PATH")
     if raw.get("auth_present") is True:
         parts.append("local credentials detected")
-    elif raw.get("auth_present") is False and raw.get("cli_installed"):
-        parts.append("not logged in — run: devin auth login")
-    if raw.get("hint"):
-        hint = str(raw["hint"])
-        if hint not in parts[-1]:
-            parts.append(hint)
+    elif raw.get("auth_present") is False:
+        parts.append(str(raw.get("hint") or "not logged in"))
 
     return {
         "logged_in": bool(raw.get("logged_in")),
-        "source": "devin_cli",
+        "source": source,
         "source_label": " · ".join(parts),
         "token_preview": None,
         "expires_at": None,
@@ -9859,52 +9861,21 @@ def _devin_acp_status() -> Dict[str, Any]:
         "hint": raw.get("hint"),
         "resolved_command": resolved,
     }
+
+
+def _copilot_acp_status() -> Dict[str, Any]:
+    """Status for copilot-acp — credentials are owned by the Copilot CLI."""
+    return _external_process_status("copilot-acp", source_slug="copilot_cli")
+
+
+def _devin_acp_status() -> Dict[str, Any]:
+    """Status for devin-acp — CLI binary + local credentials file probe."""
+    return _external_process_status("devin-acp", source_slug="devin_cli")
 
 
 def _grok_acp_status() -> Dict[str, Any]:
     """Status for grok-acp — CLI binary + local auth.json / XAI_API_KEY probe."""
-    try:
-        from hermes_cli.auth import get_external_process_provider_status
-
-        raw = get_external_process_provider_status("grok-acp")
-    except Exception as exc:
-        return {
-            "logged_in": False,
-            "source": "grok_cli",
-            "source_label": "Managed by the Grok CLI",
-            "token_preview": None,
-            "expires_at": None,
-            "has_refresh_token": False,
-            "error": str(exc),
-        }
-
-    resolved = raw.get("resolved_command") or raw.get("command") or "grok"
-    parts = ["Managed by the Grok CLI"]
-    if raw.get("resolved_command"):
-        parts.append(str(raw["resolved_command"]))
-    elif raw.get("cli_installed") is False:
-        parts.append("CLI not found on PATH")
-    if raw.get("auth_present") is True:
-        parts.append("local credentials detected")
-    elif raw.get("auth_present") is False and raw.get("cli_installed"):
-        parts.append("not logged in — run: grok login")
-    if raw.get("hint"):
-        hint = str(raw["hint"])
-        if hint not in parts[-1]:
-            parts.append(hint)
-
-    return {
-        "logged_in": bool(raw.get("logged_in")),
-        "source": "grok_cli",
-        "source_label": " · ".join(parts),
-        "token_preview": None,
-        "expires_at": None,
-        "has_refresh_token": False,
-        "cli_installed": raw.get("cli_installed"),
-        "auth_present": raw.get("auth_present"),
-        "hint": raw.get("hint"),
-        "resolved_command": resolved,
-    }
+    return _external_process_status("grok-acp", source_slug="grok_cli")
 
 
 # Explicit, hand-tuned OAuth/account provider cards. These carry the bits that
