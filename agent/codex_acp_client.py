@@ -1,6 +1,6 @@
 """OpenAI-compatible shim that forwards Hermes requests to ``codex-acp``.
 
-Mirrors :class:`agent.copilot_acp_client.CopilotACPClient` for the OpenAI
+Mirrors :class:`agent.acp_client_base.BaseACPClient` for the OpenAI
 Codex CLI ACP adapter (``@agentclientprotocol/codex-acp``). The adapter
 exposes Codex over stdio JSON-RPC and follows the shared ACP client lifecycle
 (see parent module).
@@ -27,7 +27,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from agent.copilot_acp_client import CopilotACPClient, _coalesce_acp_args
+from agent.acp_client_base import BaseACPClient
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def _resolve_args(command: str | None = None) -> list[str]:
     return []
 
 
-class CodexACPClient(CopilotACPClient):
+class CodexACPClient(BaseACPClient):
     """Minimal OpenAI-client-compatible facade for OpenAI Codex CLI ACP."""
 
     _acp_display_name = "Codex ACP"
@@ -120,6 +120,10 @@ class CodexACPClient(CopilotACPClient):
         "Install the Codex ACP adapter (npm install -g @agentclientprotocol/codex-acp "
         "and @openai/codex) or set HERMES_CODEX_ACP_COMMAND/CODEX_ACP_CLI_PATH."
     )
+    _acp_marker_base_url = "acp://codex"
+
+    _resolve_command = staticmethod(_resolve_command)
+    _resolve_args = staticmethod(_resolve_args)
 
     def __init__(
         self,
@@ -134,27 +138,18 @@ class CodexACPClient(CopilotACPClient):
         args: list[str] | None = None,
         **kwargs: Any,
     ):
-        # Resolve against Codex defaults *before* super(), so an empty
-        # ``args=[]`` from incomplete call-site wiring cannot fall through to
-        # CopilotACPClient's module-level defaults (``--acp --stdio``).
-        resolved_command = acp_command or command or _resolve_command()
-        resolved_args = _coalesce_acp_args(
-            acp_args, args, lambda: _resolve_args(resolved_command)
-        )
         super().__init__(
-            api_key=api_key or "codex-acp",
-            base_url=base_url or ACP_MARKER_BASE_URL,
+            api_key=api_key,
+            base_url=base_url,
             default_headers=default_headers,
-            acp_command=resolved_command,
-            acp_args=resolved_args,
+            acp_command=acp_command,
+            acp_args=acp_args,
             acp_cwd=acp_cwd,
+            command=command,
+            args=args,
             **kwargs,
         )
-        # Re-assert the resolved argv in case kwargs still carried a stale
-        # empty list.
-        self._acp_command = resolved_command
-        self._acp_args = resolved_args
-        self._codex_path: str | None = _resolve_codex_path(resolved_command)
+        self._codex_path: str | None = _resolve_codex_path(self._acp_command)
 
     def _subprocess_env(self) -> dict[str, str]:
         """Pass the native Codex binary and headless auth hints to the adapter."""

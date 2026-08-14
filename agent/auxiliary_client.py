@@ -2271,8 +2271,8 @@ def _maybe_wrap_anthropic(
     except ImportError:
         pass
     try:
-        from agent.copilot_acp_client import CopilotACPClient
-        if _safe_isinstance(client_obj, CopilotACPClient):
+        from agent.acp_client_base import BaseACPClient
+        if _safe_isinstance(client_obj, BaseACPClient):
             return client_obj
     except ImportError:
         pass
@@ -5927,8 +5927,8 @@ def _to_async_client(sync_client, model: str, is_vision: bool = False):
     except ImportError:
         pass
     try:
-        from agent.copilot_acp_client import CopilotACPClient
-        if isinstance(sync_client, CopilotACPClient):
+        from agent.acp_client_base import BaseACPClient
+        if isinstance(sync_client, BaseACPClient):
             return sync_client, model
     except ImportError:
         pass
@@ -6668,9 +6668,9 @@ def resolve_provider_client(
             or _read_main_model_for_aux(),
             provider,
         )
-        from agent.acp_client_factory import ACP_PROVIDERS, create_acp_client
+        from agent.acp_client_factory import create_acp_client, is_acp_provider
 
-        if provider in ACP_PROVIDERS:
+        if is_acp_provider(provider, str(creds.get("base_url") or "")):
             api_key = str(creds.get("api_key", "")).strip()
             base_url = str(creds.get("base_url", "")).strip()
             command = str(creds.get("command", "")).strip() or None

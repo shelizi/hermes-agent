@@ -194,7 +194,7 @@ class TestDevinAcpClientDefaults(unittest.TestCase):
         assert any("Devin" in s or "ACP" in s or "Copilot" in s for s in statuses)
 
     def test_tool_preview_strips_terminal_escape_sequences(self):
-        from agent.copilot_acp_client import _tool_update_text_preview
+        from agent.acp_client_base import _tool_update_text_preview
 
         preview = _tool_update_text_preview(
             {
@@ -215,7 +215,7 @@ class TestDevinAcpClientDefaults(unittest.TestCase):
         assert "\x1b" not in preview
 
     def test_permission_auto_selects_allow(self):
-        from agent.copilot_acp_client import _permission_auto_selected
+        from agent.acp_client_base import _permission_auto_selected
 
         resp = _permission_auto_selected(
             7,
@@ -361,9 +361,9 @@ class TestDevinAcpClientDefaults(unittest.TestCase):
 
 class TestAcpClientFactory(unittest.TestCase):
     def test_create_devin(self):
-        from agent.acp_client_factory import ACP_PROVIDERS, create_acp_client, is_acp_provider
+        from agent.acp_client_factory import create_acp_client, is_acp_provider
 
-        assert "devin-acp" in ACP_PROVIDERS
+        assert is_acp_provider("devin-acp") is True
         assert is_acp_provider("devin-acp") is True
         assert is_acp_provider(base_url="acp://devin") is True
         client = create_acp_client(
@@ -481,7 +481,7 @@ class TestAcpToolLoopSession(unittest.TestCase):
             procs.append(proc)
             return proc
 
-        with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+        with patch("agent.acp_client_base.subprocess.Popen", side_effect=_popen):
             client = CopilotACPClient(
                 command="fake-acp",
                 args=["--stdio"],
@@ -563,7 +563,7 @@ class TestAcpToolLoopSession(unittest.TestCase):
             procs.append(proc)
             return proc
 
-        with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+        with patch("agent.acp_client_base.subprocess.Popen", side_effect=_popen):
             client = DevinACPClient(
                 command="fake-acp",
                 args=["acp"],
@@ -930,7 +930,7 @@ class TestAcpProcessReuse(unittest.TestCase):
             {"HERMES_ACP_PROCESS_REUSE": "1", "HERMES_ACP_SESSION_REUSE": "0"},
             clear=False,
         ):
-            with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+            with patch("agent.acp_client_base.subprocess.Popen", side_effect=_popen):
                 client = CopilotACPClient(
                     command="fake-acp",
                     args=["--stdio"],
@@ -962,7 +962,7 @@ class TestAcpProcessReuse(unittest.TestCase):
             procs.append(proc)
             return proc
 
-        with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+        with patch("agent.acp_client_base.subprocess.Popen", side_effect=_popen):
             client = CopilotACPClient(
                 command="fake-acp",
                 args=["--stdio"],
@@ -1009,7 +1009,7 @@ class TestAcpProcessReuse(unittest.TestCase):
             return proc
 
         with patch.dict("os.environ", {"HERMES_ACP_PROCESS_REUSE": "0"}, clear=False):
-            with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+            with patch("agent.acp_client_base.subprocess.Popen", side_effect=_popen):
                 client = CopilotACPClient(
                     command="fake-acp",
                     args=["--stdio"],
@@ -1034,7 +1034,7 @@ class TestAcpProcessReuse(unittest.TestCase):
             procs.append(proc)
             return proc
 
-        with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+        with patch("agent.acp_client_base.subprocess.Popen", side_effect=_popen):
             client = CopilotACPClient(
                 command="fake-acp",
                 args=["--stdio"],
@@ -1061,7 +1061,7 @@ class TestAcpProcessReuse(unittest.TestCase):
             procs.append(proc)
             return proc
 
-        with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+        with patch("agent.acp_client_base.subprocess.Popen", side_effect=_popen):
             client = CopilotACPClient(
                 command="fake-acp",
                 args=["--stdio"],
@@ -1079,7 +1079,7 @@ class TestAcpProcessReuse(unittest.TestCase):
         def _popen(*_a, **_k):
             return _ScriptedAcpProcess()
 
-        with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+        with patch("agent.acp_client_base.subprocess.Popen", side_effect=_popen):
             client = CopilotACPClient(
                 command="fake-acp",
                 args=["--stdio"],
@@ -1116,7 +1116,7 @@ class TestAcpProcessReuse(unittest.TestCase):
             procs.append(proc)
             return proc
 
-        with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+        with patch("agent.acp_client_base.subprocess.Popen", side_effect=_popen):
             client = CopilotACPClient(
                 command="fake-acp",
                 args=["--stdio"],
@@ -1135,7 +1135,7 @@ class TestAcpProcessReuse(unittest.TestCase):
         def _popen(*_a, **_k):
             return _ScriptedAcpProcessWithTrailingChunk(delay_seconds=0.45)
 
-        with patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_popen):
+        with patch("agent.acp_client_base.subprocess.Popen", side_effect=_popen):
             client = CopilotACPClient(
                 command="fake-acp",
                 args=["--stdio"],

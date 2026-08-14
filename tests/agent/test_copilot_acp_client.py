@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from agent.copilot_acp_client import CopilotACPClient, _acp_rpc_error_message
+from agent.acp_client_base import _acp_rpc_error_message
+from agent.copilot_acp_client import CopilotACPClient
 
 
 class _FakeProcess:
@@ -495,7 +496,7 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
 
             with patch(
-                "agent.copilot_acp_client.get_write_denied_error",
+                "agent.acp_client_base.get_write_denied_error",
                 return_value="Write denied: protected",
                 create=True,
             ):
@@ -593,7 +594,7 @@ def test_run_prompt_preserves_real_home_when_profile_home_available(monkeypatch,
     captured = {}
     client = _make_home_client(tmp_path)
 
-    with _patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_fake_popen_capture(captured)):
+    with _patch("agent.acp_client_base.subprocess.Popen", side_effect=_fake_popen_capture(captured)):
         with pytest.raises(RuntimeError, match="Could not start Copilot ACP command"):
             client._run_prompt("hello", timeout_seconds=1)
 
@@ -611,7 +612,7 @@ def test_run_prompt_passes_home_when_parent_env_is_clean(monkeypatch, tmp_path):
     captured = {}
     client = _make_home_client(tmp_path)
 
-    with _patch("agent.copilot_acp_client.subprocess.Popen", side_effect=_fake_popen_capture(captured)):
+    with _patch("agent.acp_client_base.subprocess.Popen", side_effect=_fake_popen_capture(captured)):
         with pytest.raises(RuntimeError, match="Could not start Copilot ACP command"):
             client._run_prompt("hello", timeout_seconds=1)
 
@@ -631,7 +632,7 @@ class TestAcpContentParts(unittest.TestCase):
     """OpenAI multimodal parts → ACP ContentBlocks for session/prompt."""
 
     def test_data_url_image_part_becomes_acp_image_block(self) -> None:
-        from agent.copilot_acp_client import _openai_image_part_to_acp_block
+        from agent.acp_client_base import _openai_image_part_to_acp_block
 
         block = _openai_image_part_to_acp_block(
             {
@@ -648,7 +649,7 @@ class TestAcpContentParts(unittest.TestCase):
         self.assertEqual(block["data"], _ONE_PX_B64)
 
     def test_local_file_image_part_is_inlined(self) -> None:
-        from agent.copilot_acp_client import _openai_image_part_to_acp_block
+        from agent.acp_client_base import _openai_image_part_to_acp_block
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "shot.png"
@@ -667,7 +668,7 @@ class TestAcpContentParts(unittest.TestCase):
         self.assertTrue(str(block.get("uri") or "").startswith("file:"))
 
     def test_extract_media_from_messages_collects_images_and_files(self) -> None:
-        from agent.copilot_acp_client import _extract_acp_media_blocks
+        from agent.acp_client_base import _extract_acp_media_blocks
 
         with tempfile.TemporaryDirectory() as tmpdir:
             notes = Path(tmpdir) / "notes.md"
@@ -704,7 +705,7 @@ class TestAcpContentParts(unittest.TestCase):
         self.assertTrue(str(link["uri"]).startswith("file:"))
 
     def test_build_prompt_blocks_gates_image_on_capability(self) -> None:
-        from agent.copilot_acp_client import _build_acp_prompt_blocks
+        from agent.acp_client_base import _build_acp_prompt_blocks
 
         media = [
             {
@@ -740,7 +741,7 @@ class TestAcpContentParts(unittest.TestCase):
         self.assertEqual(without_cap[1]["type"], "resource_link")
 
     def test_render_message_content_keeps_image_placeholder(self) -> None:
-        from agent.copilot_acp_client import _render_message_content
+        from agent.acp_client_base import _render_message_content
 
         rendered = _render_message_content(
             [
@@ -759,7 +760,7 @@ class TestAcpContentParts(unittest.TestCase):
         self.assertNotIn(_ONE_PX_B64, rendered)
 
     def test_parse_prompt_capabilities_from_initialize(self) -> None:
-        from agent.copilot_acp_client import _parse_prompt_capabilities
+        from agent.acp_client_base import _parse_prompt_capabilities
 
         caps = _parse_prompt_capabilities(
             {

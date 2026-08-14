@@ -109,7 +109,7 @@ class TestCodexAcpClientDefaults(unittest.TestCase):
             assert argv == ["C:\\bin\\codex-acp.exe", "--debug"]
 
     def test_authenticate_calls_api_key_method(self):
-        with patch("agent.codex_acp_client.CopilotACPClient._rpc") as rpc:
+        with patch("agent.acp_client_base.BaseACPClient._rpc") as rpc:
             with patch.dict(
                 "os.environ",
                 {"OPENAI_API_KEY": "sk-test"},

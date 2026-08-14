@@ -1,6 +1,6 @@
 """OpenAI-compatible shim that forwards Hermes requests to ``devin acp``.
 
-Mirrors :class:`agent.copilot_acp_client.CopilotACPClient` for Cognition's
+Mirrors :class:`agent.acp_client_base.BaseACPClient` for Cognition's
 Devin CLI ACP mode (JSON-RPC over stdio). Process reuse and per-prompt
 ``session/new`` follow the shared ACP client lifecycle (see parent module).
 
@@ -31,7 +31,7 @@ import re
 import shlex
 from typing import Any
 
-from agent.copilot_acp_client import CopilotACPClient, _coalesce_acp_args
+from agent.acp_client_base import BaseACPClient
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,8 @@ def _resolve_command() -> str:
         return "devin"
 
 
-def _resolve_args() -> list[str]:
+def _resolve_args(command: str | None = None) -> list[str]:
+    del command
     raw = os.getenv("HERMES_DEVIN_ACP_ARGS", "").strip()
     if not raw:
         # Official JetBrains / Zed ACP config uses a single ``acp`` argument.
@@ -168,7 +169,7 @@ def resolve_devin_acp_model_value(
     return None
 
 
-class DevinACPClient(CopilotACPClient):
+class DevinACPClient(BaseACPClient):
     """Minimal OpenAI-client-compatible facade for Devin CLI ACP."""
 
     _acp_display_name = "Devin ACP"
@@ -177,6 +178,10 @@ class DevinACPClient(CopilotACPClient):
         "Install Devin CLI (https://docs.devin.ai/cli) and run "
         "`devin auth login`, or set HERMES_DEVIN_ACP_COMMAND/DEVIN_CLI_PATH."
     )
+    _acp_marker_base_url = "acp://devin"
+
+    _resolve_command = staticmethod(_resolve_command)
+    _resolve_args = staticmethod(_resolve_args)
 
     def __init__(
         self,
@@ -191,24 +196,17 @@ class DevinACPClient(CopilotACPClient):
         args: list[str] | None = None,
         **kwargs: Any,
     ):
-        # Resolve against Devin defaults *before* super(), so an empty
-        # ``args=[]`` from incomplete call-site wiring cannot fall through to
-        # CopilotACPClient's module-level ``_resolve_args()`` (``--acp --stdio``).
-        resolved_command = acp_command or command or _resolve_command()
-        resolved_args = _coalesce_acp_args(acp_args, args, _resolve_args)
         super().__init__(
-            api_key=api_key or "devin-acp",
-            base_url=base_url or ACP_MARKER_BASE_URL,
+            api_key=api_key,
+            base_url=base_url,
             default_headers=default_headers,
-            acp_command=resolved_command,
-            acp_args=resolved_args,
+            acp_command=acp_command,
+            acp_args=acp_args,
             acp_cwd=acp_cwd,
+            command=command,
+            args=args,
             **kwargs,
         )
-        # Parent stores args via its own default_args_fn; re-assert Devin's
-        # resolved argv in case kwargs still carried a stale empty list.
-        self._acp_command = resolved_command
-        self._acp_args = resolved_args
         # Process-level model binding (None = leave CLI default alone).
         self._desired_process_model: str | None = None
         self._process_bound_model: str | None = None

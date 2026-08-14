@@ -226,7 +226,7 @@ def test_agent_browser_npx_warmup_hides_npx_window(monkeypatch):
 
 
 def test_devin_acp_client_hides_console_window(monkeypatch):
-    from agent import copilot_acp_client
+    from agent import acp_client_base
     from agent.devin_acp_client import DevinACPClient
 
     captured = []
@@ -240,9 +240,9 @@ def test_devin_acp_client_hides_console_window(monkeypatch):
         captured.append((cmd, kwargs))
         return _Proc()
 
-    monkeypatch.setattr(copilot_acp_client, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
-    monkeypatch.setattr(copilot_acp_client.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(copilot_acp_client.threading, "Thread", lambda *a, **k: SimpleNamespace(start=lambda: None))
+    monkeypatch.setattr(acp_client_base, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
+    monkeypatch.setattr(acp_client_base.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(acp_client_base.threading, "Thread", lambda *a, **k: SimpleNamespace(start=lambda: None))
 
     client = DevinACPClient(acp_command="devin", acp_args=["acp"])
     client._subprocess_env = lambda: {}

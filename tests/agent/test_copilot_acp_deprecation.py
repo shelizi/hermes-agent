@@ -2,7 +2,7 @@
 
 import pytest
 
-from agent.copilot_acp_client import _is_gh_copilot_deprecation_message
+from agent.copilot_acp_client import CopilotACPClient
 
 
 class TestDeprecationPatternDetection:
@@ -19,7 +19,7 @@ class TestDeprecationPatternDetection:
     )
 
     def test_real_deprecation_message_matches(self):
-        assert _is_gh_copilot_deprecation_message(self._REAL_DEPRECATION_STDERR)
+        assert CopilotACPClient._is_deprecation_message(self._REAL_DEPRECATION_STDERR)
 
     @pytest.mark.parametrize(
         "stderr_text",
@@ -32,7 +32,7 @@ class TestDeprecationPatternDetection:
         ],
     )
     def test_genuine_deprecation_variants_match(self, stderr_text: str):
-        assert _is_gh_copilot_deprecation_message(stderr_text)
+        assert CopilotACPClient._is_deprecation_message(stderr_text)
 
     @pytest.mark.parametrize(
         "stderr_text",
@@ -52,7 +52,7 @@ class TestDeprecationPatternDetection:
         ],
     )
     def test_does_not_false_positive(self, stderr_text: str):
-        assert not _is_gh_copilot_deprecation_message(stderr_text)
+        assert not CopilotACPClient._is_deprecation_message(stderr_text)
 
 
 class TestGitHubModelsAzureUrl:

@@ -1,6 +1,6 @@
 """OpenAI-compatible shim that forwards Hermes requests to the Antigravity CLI ACP.
 
-Mirrors :class:`agent.copilot_acp_client.CopilotACPClient` for the Google
+Mirrors :class:`agent.acp_client_base.BaseACPClient` for the Google
 Antigravity CLI (``agy``) ACP mode (JSON-RPC over stdio). Process reuse and
 per-prompt ``session/new`` follow the shared ACP client lifecycle (see parent
 module).
@@ -24,7 +24,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from agent.copilot_acp_client import CopilotACPClient, _coalesce_acp_args
+from agent.acp_client_base import BaseACPClient
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ def _resolve_args(command: str | None = None) -> list[str]:
     return ["--acp"]
 
 
-class AntigravityACPClient(CopilotACPClient):
+class AntigravityACPClient(BaseACPClient):
     """Minimal OpenAI-client-compatible facade for Google Antigravity CLI ACP."""
 
     _acp_display_name = "Antigravity ACP"
@@ -74,6 +74,10 @@ class AntigravityACPClient(CopilotACPClient):
         "Install Google Antigravity CLI (agy) or an ACP adapter (agy-acp), "
         "or set HERMES_ANTIGRAVITY_ACP_COMMAND/ANTIGRAVITY_CLI_PATH."
     )
+    _acp_marker_base_url = "acp://antigravity"
+
+    _resolve_command = staticmethod(_resolve_command)
+    _resolve_args = staticmethod(_resolve_args)
 
     def __init__(
         self,
@@ -88,26 +92,17 @@ class AntigravityACPClient(CopilotACPClient):
         args: list[str] | None = None,
         **kwargs: Any,
     ):
-        # Resolve against Antigravity defaults *before* super(), so an empty
-        # ``args=[]`` from incomplete call-site wiring cannot fall through to
-        # CopilotACPClient's module-level defaults (``--acp --stdio``).
-        resolved_command = acp_command or command or _resolve_command()
-        resolved_args = _coalesce_acp_args(
-            acp_args, args, lambda: _resolve_args(resolved_command)
-        )
         super().__init__(
-            api_key=api_key or "antigravity-acp",
-            base_url=base_url or ACP_MARKER_BASE_URL,
+            api_key=api_key,
+            base_url=base_url,
             default_headers=default_headers,
-            acp_command=resolved_command,
-            acp_args=resolved_args,
+            acp_command=acp_command,
+            acp_args=acp_args,
             acp_cwd=acp_cwd,
+            command=command,
+            args=args,
             **kwargs,
         )
-        # Re-assert the resolved argv in case kwargs still carried a stale
-        # empty list.
-        self._acp_command = resolved_command
-        self._acp_args = resolved_args
 
     def _create_chat_completion(
         self,

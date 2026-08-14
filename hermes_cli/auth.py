@@ -7447,13 +7447,7 @@ def get_auth_status(provider_id: Optional[str] = None) -> Dict[str, Any]:
     if target == "minimax-oauth":
         return get_minimax_oauth_auth_status()
     pconfig_for_status = PROVIDER_REGISTRY.get(target)
-    try:
-        from agent.acp_client_factory import ACP_PROVIDERS as _ACP_PROVIDERS
-    except Exception:
-        _ACP_PROVIDERS = frozenset({"copilot-acp", "devin-acp", "grok-acp"})
-    if target in _ACP_PROVIDERS or (
-        pconfig_for_status and pconfig_for_status.auth_type == "external_process"
-    ):
+    if pconfig_for_status and pconfig_for_status.auth_type == "external_process":
         return get_external_process_provider_status(target)
     if target == "azure-foundry":
         return _get_azure_foundry_auth_status()

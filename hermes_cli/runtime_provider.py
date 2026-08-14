@@ -2025,9 +2025,8 @@ def resolve_runtime_provider(
                 "requested_provider": requested_provider,
             }
 
-    from agent.acp_client_factory import ACP_PROVIDERS
-
-    if provider in ACP_PROVIDERS:
+    pconfig = PROVIDER_REGISTRY.get(provider)
+    if pconfig and pconfig.auth_type == "external_process":
         creds = resolve_external_process_provider_credentials(provider)
         return {
             "provider": provider,
