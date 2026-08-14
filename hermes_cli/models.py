@@ -1193,8 +1193,6 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("nvidia",         "NVIDIA NIM",               "NVIDIA NIM (Nemotron models via build.nvidia.com or local NIM)"),
     ProviderEntry("copilot",        "GitHub Copilot",           "GitHub Copilot (Uses GITHUB_TOKEN or gh auth token)"),
     ProviderEntry("copilot-acp",    "GitHub Copilot ACP",       "GitHub Copilot ACP (Spawns copilot --acp --stdio)"),
-    ProviderEntry("devin-acp",      "Devin CLI ACP",            "Devin CLI ACP (Spawns devin acp)"),
-    ProviderEntry("grok-acp",       "Grok CLI ACP",             "Grok CLI ACP (Spawns grok --no-auto-update agent stdio)"),
     ProviderEntry("huggingface",    "Hugging Face",             "Hugging Face Inference Providers"),
     ProviderEntry("gemini",         "Google AI Studio",         "Google AI Studio (Native Gemini API)"),
     ProviderEntry("vertex",         "Google Vertex AI",         "Google Vertex AI (Gemini via GCP; OAuth2 service account or ADC, GCP billing/quotas)"),
@@ -1229,7 +1227,7 @@ try:
     for _pp in _list_providers_for_canonical():
         if _pp.name in _canonical_slugs:
             continue
-        if _pp.auth_type in {"oauth_device_code", "oauth_external", "external_process", "aws_sdk", "copilot", "vertex"}:
+        if _pp.auth_type in {"oauth_device_code", "oauth_external", "aws_sdk", "copilot", "vertex"}:
             continue  # non-api-key flows need bespoke picker UX; skip auto-inject
         _label = _pp.display_name or _pp.name
         _desc = _pp.description or f"{_label} (direct API)"
@@ -1358,12 +1356,6 @@ _PROVIDER_ALIASES = {
     "github-model": "copilot",
     "github-copilot-acp": "copilot-acp",
     "copilot-acp-agent": "copilot-acp",
-    "devin": "devin-acp",
-    "devin-cli": "devin-acp",
-    "cognition-devin": "devin-acp",
-    "grok-cli": "grok-acp",
-    "grok-build": "grok-acp",
-    "xai-grok-cli": "grok-acp",
     "google": "gemini",
     "google-gemini": "gemini",
     "google-ai-studio": "gemini",
@@ -1441,6 +1433,17 @@ _PROVIDER_ALIASES = {
     "ollama": "custom",  # bare "ollama" = local; use "ollama-cloud" for cloud
     "ollama_cloud": "ollama-cloud",
 }
+
+# Auto-extend with aliases declared in provider plugins so new ACP/MCP-style
+# providers don't need a hardcoded alias in this file.
+try:
+    from providers import list_providers as _list_providers_for_aliases
+
+    for _pp in _list_providers_for_aliases():
+        for _alias in _pp.aliases:
+            _PROVIDER_ALIASES.setdefault(_alias, _pp.name)
+except Exception:
+    pass
 
 
 # In-repo fallback for the model Hermes silently lands on when the user never

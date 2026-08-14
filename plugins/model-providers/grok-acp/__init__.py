@@ -34,13 +34,28 @@ grok_acp = GrokACPProfile(
     description="Grok Build CLI via ACP (grok --no-auto-update agent stdio).",
     aliases=("grok-cli", "grok-build", "xai-grok-cli"),
     api_mode="chat_completions",
-    env_vars=(),
+    env_vars=("GROK_ACP_BASE_URL",),
     base_url="acp://grok",
     auth_type="external_process",
     # Keep OpenAI-style image_url parts on the user turn so GrokACPClient can
     # re-encode them as ACP ``image`` content blocks when the CLI advertises
     # promptCapabilities.image (see agent/copilot_acp_client.py).
     supports_vision=True,
+    process_spec={
+        "command_env": ("HERMES_GROK_ACP_COMMAND", "GROK_CLI_PATH"),
+        "default_command": "grok",
+        "args_env": "HERMES_GROK_ACP_ARGS",
+        # Official ACP: `grok agent stdio`; --no-auto-update for automation.
+        "default_args": ["--no-auto-update", "agent", "stdio"],
+        "api_key": "grok-acp",
+        "missing_code": "missing_grok_cli",
+        "missing_msg": (
+            "Could not find the Grok CLI command '{command}'. "
+            "Install Grok Build CLI (https://docs.x.ai/build/cli), run `grok login`, "
+            "or set HERMES_GROK_ACP_COMMAND/GROK_CLI_PATH."
+        ),
+        "login_hint": "Grok CLI found but no local credentials — run: grok login or set XAI_API_KEY",
+    },
 )
 
 register_provider(grok_acp)

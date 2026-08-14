@@ -134,10 +134,6 @@ MINIMAX_OAUTH_REFRESH_SKEW_SECONDS = 60
 DEFAULT_QWEN_BASE_URL = "https://portal.qwen.ai/v1"
 DEFAULT_GITHUB_MODELS_BASE_URL = "https://api.githubcopilot.com"
 DEFAULT_COPILOT_ACP_BASE_URL = "acp://copilot"
-DEFAULT_DEVIN_ACP_BASE_URL = "acp://devin"
-DEFAULT_GROK_ACP_BASE_URL = "acp://grok"
-DEFAULT_ANTIGRAVITY_ACP_BASE_URL = "acp://antigravity"
-DEFAULT_CODEX_ACP_BASE_URL = "acp://codex"
 DEFAULT_OLLAMA_CLOUD_BASE_URL = "https://ollama.com/v1"
 DEFAULT_ACTUAL_BASE_URL = "https://api.actual.inc/v1"
 DEFAULT_ACTUAL_LOCAL_BASE_URL = "http://127.0.0.1:8080/v1"
@@ -238,7 +234,7 @@ class ProviderConfig:
     """Describes a known inference provider."""
     id: str
     name: str
-    auth_type: str  # "oauth_device_code", "oauth_external", "oauth_minimax", or "api_key"
+    auth_type: str  # "oauth_device_code", "oauth_external", "oauth_minimax", "external_process", or "api_key"
     portal_base_url: str = ""
     inference_base_url: str = ""
     client_id: str = ""
@@ -308,34 +304,6 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         auth_type="external_process",
         inference_base_url=DEFAULT_COPILOT_ACP_BASE_URL,
         base_url_env_var="COPILOT_ACP_BASE_URL",
-    ),
-    "devin-acp": ProviderConfig(
-        id="devin-acp",
-        name="Devin CLI ACP",
-        auth_type="external_process",
-        inference_base_url=DEFAULT_DEVIN_ACP_BASE_URL,
-        base_url_env_var="DEVIN_ACP_BASE_URL",
-    ),
-    "grok-acp": ProviderConfig(
-        id="grok-acp",
-        name="Grok CLI ACP",
-        auth_type="external_process",
-        inference_base_url=DEFAULT_GROK_ACP_BASE_URL,
-        base_url_env_var="GROK_ACP_BASE_URL",
-    ),
-    "antigravity-acp": ProviderConfig(
-        id="antigravity-acp",
-        name="Google Antigravity CLI ACP",
-        auth_type="external_process",
-        inference_base_url=DEFAULT_ANTIGRAVITY_ACP_BASE_URL,
-        base_url_env_var="ANTIGRAVITY_ACP_BASE_URL",
-    ),
-    "codex-acp": ProviderConfig(
-        id="codex-acp",
-        name="OpenAI Codex CLI ACP",
-        auth_type="external_process",
-        inference_base_url=DEFAULT_CODEX_ACP_BASE_URL,
-        base_url_env_var="CODEX_ACP_BASE_URL",
     ),
     "gemini": ProviderConfig(
         id="gemini",
@@ -576,15 +544,13 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
     ),
 }
 
-# Auto-extend PROVIDER_REGISTRY with any api-key provider registered in
-# providers/ that is not already declared above.  New providers only need a
-# plugins/model-providers/<name>/ plugin — no edits to this file required.
+# Auto-extend PROVIDER_REGISTRY with any provider registered in
+# plugins/model-providers/ that is not already declared above.  New providers
+# only need a plugin profile — no edits to this file required.
 try:
     from providers import list_providers as _list_providers_for_registry
     for _pp in _list_providers_for_registry():
         if _pp.name in PROVIDER_REGISTRY:
-            continue
-        if _pp.auth_type != "api_key" or not _pp.env_vars:
             continue
         # Skip providers that need custom token resolution or are special-cased
         # in resolve_provider() (copilot/kimi/zai have bespoke token refresh;
@@ -593,16 +559,33 @@ try:
         # that relies on `openrouter not in PROVIDER_REGISTRY`).
         if _pp.name in {"copilot", "kimi-coding", "kimi-coding-cn", "zai", "openrouter", "custom"}:
             continue
-        _api_key_vars = tuple(v for v in _pp.env_vars if not v.endswith("_BASE_URL") and not v.endswith("_URL"))
-        _base_url_var = next((v for v in _pp.env_vars if v.endswith("_BASE_URL") or v.endswith("_URL")), None)
-        PROVIDER_REGISTRY[_pp.name] = ProviderConfig(
-            id=_pp.name,
-            name=_pp.display_name or _pp.name,
-            auth_type="api_key",
-            inference_base_url=_pp.base_url,
-            api_key_env_vars=_api_key_vars or _pp.env_vars,
-            base_url_env_var=_base_url_var or "",
-        )
+
+        if _pp.auth_type == "api_key" and _pp.env_vars:
+            _api_key_vars = tuple(v for v in _pp.env_vars if not v.endswith("_BASE_URL") and not v.endswith("_URL"))
+            _base_url_var = next((v for v in _pp.env_vars if v.endswith("_BASE_URL") or v.endswith("_URL")), None)
+            PROVIDER_REGISTRY[_pp.name] = ProviderConfig(
+                id=_pp.name,
+                name=_pp.display_name or _pp.name,
+                auth_type="api_key",
+                inference_base_url=_pp.base_url,
+                api_key_env_vars=_api_key_vars or _pp.env_vars,
+                base_url_env_var=_base_url_var or "",
+            )
+        elif _pp.auth_type == "external_process":
+            _base_url_var = next(
+                (v for v in _pp.env_vars if v.endswith("_BASE_URL") or v.endswith("_URL")),
+                None,
+            )
+            PROVIDER_REGISTRY[_pp.name] = ProviderConfig(
+                id=_pp.name,
+                name=_pp.display_name or _pp.name,
+                auth_type="external_process",
+                inference_base_url=_pp.base_url,
+                base_url_env_var=_base_url_var or "",
+            )
+        else:
+            continue
+
         # Also register aliases so resolve_provider() resolves them
         for _alias in _pp.aliases:
             if _alias not in PROVIDER_REGISTRY:
@@ -2116,11 +2099,6 @@ def resolve_provider(
         "github-models": "copilot", "github-model": "copilot",
         "github-copilot-acp": "copilot-acp", "copilot-acp-agent": "copilot-acp",
         "aigateway": "ai-gateway", "vercel": "ai-gateway", "vercel-ai-gateway": "ai-gateway",
-        "devin": "devin-acp", "devin-cli": "devin-acp", "cognition-devin": "devin-acp",
-        "grok-cli": "grok-acp", "grok-build": "grok-acp", "xai-grok-cli": "grok-acp",
-        "antigravity": "antigravity-acp", "antigravity-cli": "antigravity-acp",
-        "google-antigravity": "antigravity-acp", "google-antigravity-cli": "antigravity-acp",
-        "codex-cli": "codex-acp", "openai-codex-acp": "codex-acp",
         "opencode": "opencode-zen", "zen": "opencode-zen",
         "qwen-portal": "qwen-oauth", "qwen-cli": "qwen-oauth", "qwen-oauth": "qwen-oauth",
         "hf": "huggingface", "hugging-face": "huggingface", "huggingface-hub": "huggingface",
@@ -7101,78 +7079,35 @@ def get_api_key_provider_status(provider_id: str) -> Dict[str, Any]:
 
 
 def _external_process_spec(provider_id: str) -> Dict[str, Any]:
-    """Return command/args defaults for an external-process provider."""
-    specs: Dict[str, Dict[str, Any]] = {
-        "copilot-acp": {
-            "command_env": ("HERMES_COPILOT_ACP_COMMAND", "COPILOT_CLI_PATH"),
-            "default_command": "copilot",
-            "args_env": "HERMES_COPILOT_ACP_ARGS",
-            "default_args": ["--acp", "--stdio"],
-            "api_key": "copilot-acp",
-            "missing_code": "missing_copilot_cli",
-            "missing_msg": (
-                "Could not find the Copilot CLI command '{command}'. "
-                "Install GitHub Copilot CLI or set HERMES_COPILOT_ACP_COMMAND/COPILOT_CLI_PATH."
-            ),
-        },
-        "devin-acp": {
-            "command_env": ("HERMES_DEVIN_ACP_COMMAND", "DEVIN_CLI_PATH"),
-            "default_command": "devin",
-            "args_env": "HERMES_DEVIN_ACP_ARGS",
-            "default_args": ["acp"],
-            "api_key": "devin-acp",
-            "missing_code": "missing_devin_cli",
-            "missing_msg": (
-                "Could not find the Devin CLI command '{command}'. "
-                "Install Devin CLI (https://docs.devin.ai/cli), run `devin auth login`, "
-                "or set HERMES_DEVIN_ACP_COMMAND/DEVIN_CLI_PATH."
-            ),
-        },
-        "grok-acp": {
-            "command_env": ("HERMES_GROK_ACP_COMMAND", "GROK_CLI_PATH"),
-            "default_command": "grok",
-            "args_env": "HERMES_GROK_ACP_ARGS",
-            # Official ACP: `grok agent stdio`; --no-auto-update for automation.
-            "default_args": ["--no-auto-update", "agent", "stdio"],
-            "api_key": "grok-acp",
-            "missing_code": "missing_grok_cli",
-            "missing_msg": (
-                "Could not find the Grok CLI command '{command}'. "
-                "Install Grok Build CLI (https://docs.x.ai/build/cli), run `grok login`, "
-                "or set HERMES_GROK_ACP_COMMAND/GROK_CLI_PATH."
-            ),
-        },
-        "antigravity-acp": {
-            "command_env": ("HERMES_ANTIGRAVITY_ACP_COMMAND", "ANTIGRAVITY_CLI_PATH"),
-            "default_command": "agy",
-            "args_env": "HERMES_ANTIGRAVITY_ACP_ARGS",
-            # Native ACP entrypoint is ``agy --acp`` (not yet shipped as of 1.0.16).
-            # Until then, override this to an adapter binary such as ``agy-acp``.
-            "default_args": ["--acp"],
-            "api_key": "antigravity-acp",
-            "missing_code": "missing_antigravity_cli",
-            "missing_msg": (
-                "Could not find the Antigravity CLI command '{command}'. "
-                "Install Google Antigravity CLI (agy) or an ACP adapter (agy-acp), "
-                "or set HERMES_ANTIGRAVITY_ACP_COMMAND/ANTIGRAVITY_CLI_PATH."
-            ),
-        },
-        "codex-acp": {
-            "command_env": ("HERMES_CODEX_ACP_COMMAND", "CODEX_ACP_CLI_PATH"),
-            "default_command": "codex-acp",
-            "args_env": "HERMES_CODEX_ACP_ARGS",
-            # ``codex-acp`` is an ACP server; it needs no launch args.
-            "default_args": [],
-            "api_key": "codex-acp",
-            "missing_code": "missing_codex_acp_cli",
-            "missing_msg": (
-                "Could not find the Codex ACP command '{command}'. "
-                "Install @agentclientprotocol/codex-acp and @openai/codex "
-                "or set HERMES_CODEX_ACP_COMMAND/CODEX_ACP_CLI_PATH."
-            ),
-        },
+    """Return command/args defaults for an external-process provider.
+
+    The canonical metadata lives in the provider's
+    ``plugins/model-providers/<name>/`` profile (``ProviderProfile.process_spec``)
+    so new ACP/MCP-style providers don't need to be hardcoded here.
+    """
+    try:
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(provider_id)
+        if profile and getattr(profile, "process_spec", None):
+            return dict(profile.process_spec)
+    except Exception:
+        pass
+
+    # Fallback default for any external_process provider that has not yet
+    # supplied a process_spec (preserves the original copilot-acp defaults).
+    return {
+        "command_env": ("HERMES_COPILOT_ACP_COMMAND", "COPILOT_CLI_PATH"),
+        "default_command": "copilot",
+        "args_env": "HERMES_COPILOT_ACP_ARGS",
+        "default_args": ["--acp", "--stdio"],
+        "api_key": "copilot-acp",
+        "missing_code": "missing_copilot_cli",
+        "missing_msg": (
+            "Could not find the Copilot CLI command '{command}'. "
+            "Install GitHub Copilot CLI or set HERMES_COPILOT_ACP_COMMAND/COPILOT_CLI_PATH."
+        ),
     }
-    return dict(specs.get(provider_id) or specs["copilot-acp"])
 
 
 def _resolve_external_process_command_args(provider_id: str) -> tuple[str, list[str]]:
@@ -7406,13 +7341,11 @@ def get_external_process_provider_status(provider_id: str) -> Dict[str, Any]:
     logged_in = bool(cli_installed and auth_present is not False)
 
     hint = None
+    spec = _external_process_spec(provider_id)
     if not cli_installed:
-        spec = _external_process_spec(provider_id)
         hint = str(spec.get("missing_msg") or "CLI not found.").format(command=command)
-    elif auth_present is False and provider_id == "devin-acp":
-        hint = "Devin CLI found but no local credentials — run: devin auth login"
-    elif auth_present is False and provider_id == "grok-acp":
-        hint = "Grok CLI found but no local credentials — run: grok login or set XAI_API_KEY"
+    elif auth_present is False:
+        hint = str(spec.get("login_hint") or "").strip() or None
 
     return {
         "configured": cli_installed,

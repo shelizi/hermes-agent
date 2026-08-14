@@ -27,16 +27,31 @@ class AntigravityACPProfile(ProviderProfile):
 antigravity_acp = AntigravityACPProfile(
     name="antigravity-acp",
     display_name="Google Antigravity CLI ACP",
-    description="Google Antigravity CLI via ACP (antigravity acp).",
-    aliases=("antigravity-cli", "google-antigravity", "google-antigravity-cli"),
+    description="Google Antigravity CLI via ACP (antigravity --acp).",
+    aliases=("antigravity", "antigravity-cli", "google-antigravity", "google-antigravity-cli"),
     api_mode="chat_completions",
-    env_vars=(),
+    env_vars=("ANTIGRAVITY_ACP_BASE_URL",),
     base_url="acp://antigravity",
     auth_type="external_process",
     # Keep OpenAI-style image_url parts on the user turn so AntigravityACPClient
     # can re-encode them as ACP content blocks when the CLI advertises
     # promptCapabilities.image (see agent/copilot_acp_client.py).
     supports_vision=True,
+    process_spec={
+        "command_env": ("HERMES_ANTIGRAVITY_ACP_COMMAND", "ANTIGRAVITY_CLI_PATH"),
+        "default_command": "agy",
+        "args_env": "HERMES_ANTIGRAVITY_ACP_ARGS",
+        # Native ACP entrypoint is ``agy --acp`` (not yet shipped as of 1.0.16).
+        # Until then, override this to an adapter binary such as ``agy-acp``.
+        "default_args": ["--acp"],
+        "api_key": "antigravity-acp",
+        "missing_code": "missing_antigravity_cli",
+        "missing_msg": (
+            "Could not find the Antigravity CLI command '{command}'. "
+            "Install Google Antigravity CLI (agy) or an ACP adapter (agy-acp), "
+            "or set HERMES_ANTIGRAVITY_ACP_COMMAND/ANTIGRAVITY_CLI_PATH."
+        ),
+    },
 )
 
 register_provider(antigravity_acp)

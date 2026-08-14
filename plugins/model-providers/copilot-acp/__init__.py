@@ -25,14 +25,28 @@ class CopilotACPProfile(ProviderProfile):
 
 copilot_acp = CopilotACPProfile(
     name="copilot-acp",
+    display_name="GitHub Copilot ACP",
+    description="GitHub Copilot CLI via ACP (copilot --acp --stdio).",
     aliases=("github-copilot-acp", "copilot-acp-agent"),
     api_mode="chat_completions",  # ACP subprocess uses chat_completions routing
-    env_vars=(),  # Managed by ACP subprocess
+    env_vars=("COPILOT_ACP_BASE_URL",),
     base_url="acp://copilot",  # ACP internal scheme
     auth_type="external_process",
     # Native image_url parts are re-encoded as ACP content blocks when the
     # Copilot agent advertises promptCapabilities.image.
     supports_vision=True,
+    process_spec={
+        "command_env": ("HERMES_COPILOT_ACP_COMMAND", "COPILOT_CLI_PATH"),
+        "default_command": "copilot",
+        "args_env": "HERMES_COPILOT_ACP_ARGS",
+        "default_args": ["--acp", "--stdio"],
+        "api_key": "copilot-acp",
+        "missing_code": "missing_copilot_cli",
+        "missing_msg": (
+            "Could not find the Copilot CLI command '{command}'. "
+            "Install GitHub Copilot CLI or set HERMES_COPILOT_ACP_COMMAND/COPILOT_CLI_PATH."
+        ),
+    },
 )
 
 register_provider(copilot_acp)
