@@ -300,9 +300,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     ],
     "openai-codex": _codex_curated_models(),
     "xai-oauth": _xai_curated_models(),
-    "copilot-acp": [
-        "copilot-acp",
-    ],
     "copilot": [
         "gpt-5.4",
         "gpt-5.4-mini",

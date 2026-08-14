@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+import providers
 from agent.grok_acp_client import (
     ACP_MARKER_BASE_URL,
     GrokACPClient,
@@ -40,11 +41,9 @@ class TestGrokAcpProviderRegistry(unittest.TestCase):
 
 class TestGrokAcpResolve(unittest.TestCase):
     def test_status_and_creds(self):
+        grok = providers.get_provider_profile("grok-acp")
         with patch("hermes_cli.auth.shutil.which", return_value="/usr/local/bin/grok"):
-            with patch(
-                "hermes_cli.auth._grok_local_credentials_present",
-                return_value=True,
-            ):
+            with patch.object(grok, "auth_present", return_value=True):
                 with patch.dict(
                     "os.environ",
                     {"HERMES_GROK_ACP_ARGS": "--no-auto-update agent stdio"},
@@ -68,11 +67,9 @@ class TestGrokAcpResolve(unittest.TestCase):
                     assert creds["args"] == ["--no-auto-update", "agent", "stdio"]
 
     def test_status_cli_without_credentials_is_not_logged_in(self):
+        grok = providers.get_provider_profile("grok-acp")
         with patch("hermes_cli.auth.shutil.which", return_value="/usr/local/bin/grok"):
-            with patch(
-                "hermes_cli.auth._grok_local_credentials_present",
-                return_value=False,
-            ):
+            with patch.object(grok, "auth_present", return_value=False):
                 status = get_external_process_provider_status("grok-acp")
         assert status["configured"] is True
         assert status["cli_installed"] is True

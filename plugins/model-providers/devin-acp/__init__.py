@@ -68,12 +68,46 @@ class DevinACPProfile(ProviderProfile):
 
     def auth_present(self) -> bool | None:
         """Devin CLI writes a local credentials.toml; probe it without loading secrets."""
-        try:
-            from hermes_cli.auth import _devin_local_credentials_present
-
-            return _devin_local_credentials_present()
-        except Exception:
-            return None
+        home = Path.home()
+        candidates: list[Path] = []
+        appdata = os.environ.get("APPDATA", "").strip()
+        if appdata:
+            candidates.append(Path(appdata) / "devin" / "credentials.toml")
+        xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+        if xdg:
+            candidates.append(Path(xdg) / "devin" / "credentials.toml")
+        candidates.extend(
+            [
+                home / ".config" / "devin" / "credentials.toml",
+                home / "Library" / "Application Support" / "devin" / "credentials.toml",
+                home / ".devin" / "credentials.toml",
+            ]
+        )
+        seen: set[str] = set()
+        for path in candidates:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                if not path.is_file() or path.stat().st_size <= 0:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            lower = text.lower()
+            if any(
+                marker in lower
+                for marker in (
+                    "windsurf_api_key",
+                    "api_key",
+                    "access_token",
+                    "session_token",
+                    "refresh_token",
+                )
+            ):
+                return True
+        return False
 
     def search_command_path(self, command: str) -> str | None:
         r"""Devin CLI installer keeps the binary under %LOCALAPPDATA%\devin\cli\bin."""

@@ -298,13 +298,6 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         api_key_env_vars=("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
         base_url_env_var="COPILOT_API_BASE_URL",
     ),
-    "copilot-acp": ProviderConfig(
-        id="copilot-acp",
-        name="GitHub Copilot ACP",
-        auth_type="external_process",
-        inference_base_url=DEFAULT_COPILOT_ACP_BASE_URL,
-        base_url_env_var="COPILOT_ACP_BASE_URL",
-    ),
     "gemini": ProviderConfig(
         id="gemini",
         name="Google AI Studio",
@@ -7172,73 +7165,6 @@ def _resolve_external_process_command_path(
         pass
 
     return None
-
-
-def _devin_local_credentials_present() -> bool:
-    """Best-effort check that Devin CLI has a local credentials file.
-
-    Does **not** validate the token with the network — only that a
-    credentials.toml with a key-shaped field exists in known locations
-    (Windows ``%APPDATA%/devin``, macOS Application Support, XDG config).
-    """
-    from pathlib import Path
-
-    home = Path.home()
-    candidates: list[Path] = []
-    appdata = os.environ.get("APPDATA", "").strip()
-    if appdata:
-        candidates.append(Path(appdata) / "devin" / "credentials.toml")
-    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
-    if xdg:
-        candidates.append(Path(xdg) / "devin" / "credentials.toml")
-    candidates.extend(
-        [
-            home / ".config" / "devin" / "credentials.toml",
-            home / "Library" / "Application Support" / "devin" / "credentials.toml",
-            home / ".devin" / "credentials.toml",
-        ]
-    )
-    seen: set[str] = set()
-    for path in candidates:
-        key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        try:
-            if not path.is_file() or path.stat().st_size <= 0:
-                continue
-            # Avoid loading secrets into logs — only look for key *names*.
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        lower = text.lower()
-        if any(
-            marker in lower
-            for marker in (
-                "windsurf_api_key",
-                "api_key",
-                "access_token",
-                "session_token",
-                "refresh_token",
-            )
-        ):
-            return True
-    return False
-
-
-def _grok_local_credentials_present() -> bool:
-    """Best-effort check that Grok CLI has a local auth file or an API key.
-
-    ``grok login`` writes ``~/.grok/auth.json``. The CLI also accepts an
-    ambient ``XAI_API_KEY``. Either is enough for ``grok agent stdio``.
-    """
-    if os.environ.get("XAI_API_KEY", "").strip():
-        return True
-    auth_json = Path.home() / ".grok" / "auth.json"
-    try:
-        return auth_json.is_file() and auth_json.stat().st_size > 0
-    except OSError:
-        return False
 
 
 def _external_process_auth_present(provider_id: str) -> Optional[bool]:

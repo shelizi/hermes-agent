@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+import providers
 from agent.devin_acp_client import (
     ACP_MARKER_BASE_URL,
     DevinACPClient,
@@ -66,11 +67,9 @@ class TestDevinAcpResolve(unittest.TestCase):
             assert resolved.casefold().endswith(r"devin\cli\bin\devin.exe")
 
     def test_status_and_creds(self):
+        devin = providers.get_provider_profile("devin-acp")
         with patch("hermes_cli.auth.shutil.which", return_value="/usr/local/bin/devin"):
-            with patch(
-                "hermes_cli.auth._devin_local_credentials_present",
-                return_value=True,
-            ):
+            with patch.object(devin, "auth_present", return_value=True):
                 with patch.dict("os.environ", {"HERMES_DEVIN_ACP_ARGS": "acp --debug"}, clear=False):
                     status = get_external_process_provider_status("devin-acp")
                     assert status["configured"] is True
@@ -90,11 +89,9 @@ class TestDevinAcpResolve(unittest.TestCase):
                     assert creds["args"] == ["acp", "--debug"]
 
     def test_status_cli_without_credentials_is_not_logged_in(self):
+        devin = providers.get_provider_profile("devin-acp")
         with patch("hermes_cli.auth.shutil.which", return_value="/usr/local/bin/devin"):
-            with patch(
-                "hermes_cli.auth._devin_local_credentials_present",
-                return_value=False,
-            ):
+            with patch.object(devin, "auth_present", return_value=False):
                 status = get_external_process_provider_status("devin-acp")
         assert status["configured"] is True
         assert status["cli_installed"] is True
@@ -400,8 +397,6 @@ class TestAcpClientFactory(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from hermes_cli.auth import _devin_local_credentials_present
-
         with tempfile.TemporaryDirectory() as td:
             cred_dir = Path(td) / "devin"
             cred_dir.mkdir()
@@ -410,10 +405,11 @@ class TestAcpClientFactory(unittest.TestCase):
                 'windsurf_api_key = "devin-session-token$secret-value"\n',
                 encoding="utf-8",
             )
+            devin = providers.get_provider_profile("devin-acp")
             with patch.dict("os.environ", {"APPDATA": td, "XDG_CONFIG_HOME": td}, clear=False):
                 # Point home-based candidates away from the real user home by
                 # still using APPDATA/XDG which our probe checks first.
-                assert _devin_local_credentials_present() is True
+                assert devin.auth_present() is True
 
             missing = Path(td) / "empty"
             missing.mkdir()
@@ -423,7 +419,7 @@ class TestAcpClientFactory(unittest.TestCase):
                 clear=False,
             ):
                 with patch("pathlib.Path.home", return_value=missing):
-                    assert _devin_local_credentials_present() is False
+                    assert devin.auth_present() is False
 
 
 class TestAcpToolLoopSession(unittest.TestCase):

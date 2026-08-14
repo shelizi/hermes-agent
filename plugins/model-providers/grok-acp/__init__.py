@@ -10,6 +10,7 @@ Official ACP entrypoint (xAI docs / Zed ACP registry):
   ``grok agent stdio``
 """
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -67,12 +68,13 @@ class GrokACPProfile(ProviderProfile):
 
     def auth_present(self) -> bool | None:
         """Grok CLI uses XAI_API_KEY or ~/.grok/auth.json."""
+        if os.environ.get("XAI_API_KEY", "").strip():
+            return True
+        auth_json = Path.home() / ".grok" / "auth.json"
         try:
-            from hermes_cli.auth import _grok_local_credentials_present
-
-            return _grok_local_credentials_present()
-        except Exception:
-            return None
+            return auth_json.is_file() and auth_json.stat().st_size > 0
+        except OSError:
+            return False
 
     def search_command_path(self, command: str) -> str | None:
         """Grok Build CLI installs under ~/.grok/bin."""
