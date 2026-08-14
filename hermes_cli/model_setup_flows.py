@@ -1906,222 +1906,11 @@ def _model_flow_copilot(config, current_model=""):
     else:
         print("No change.")
 
-def _model_flow_copilot_acp(config, current_model=""):
-    """GitHub Copilot ACP flow using the local Copilot CLI."""
-    from hermes_cli.auth import (
-        PROVIDER_REGISTRY,
-        _prompt_model_selection,
-        _save_model_choice,
-        deactivate_provider,
-        get_external_process_provider_status,
-        resolve_api_key_provider_credentials,
-        resolve_external_process_provider_credentials,
-    )
-    from hermes_cli.models import (
-        _PROVIDER_MODELS,
-        fetch_github_model_catalog,
-        normalize_copilot_model_id,
-    )
-    from hermes_cli.config import load_config, save_config
+def _model_flow_external_process(config, provider_id, current_model=""):
+    """Generic setup flow for external-process (ACP/MCP-style) providers.
 
-    del config
-
-    provider_id = "copilot-acp"
-    pconfig = PROVIDER_REGISTRY[provider_id]
-
-    status = get_external_process_provider_status(provider_id)
-    resolved_command = (
-        status.get("resolved_command") or status.get("command") or "copilot"
-    )
-    effective_base = status.get("base_url") or pconfig.inference_base_url
-
-    print("  GitHub Copilot ACP delegates Hermes turns to `copilot --acp`.")
-    print("  Hermes currently starts its own ACP subprocess for each request.")
-    print("  Hermes uses your selected model as a hint for the Copilot ACP session.")
-    print(f"  Command: {resolved_command}")
-    print(f"  Backend marker: {effective_base}")
-    print()
-
-    try:
-        creds = resolve_external_process_provider_credentials(provider_id)
-    except Exception as exc:
-        print(f"  ⚠ {exc}")
-        print(
-            "  Set HERMES_COPILOT_ACP_COMMAND or COPILOT_CLI_PATH if Copilot CLI is installed elsewhere."
-        )
-        return
-
-    effective_base = creds.get("base_url") or effective_base
-
-    catalog_api_key = ""
-    try:
-        catalog_creds = resolve_api_key_provider_credentials("copilot")
-        catalog_api_key = catalog_creds.get("api_key", "")
-    except Exception:
-        pass
-
-    catalog = fetch_github_model_catalog(catalog_api_key)
-    normalized_current_model = (
-        normalize_copilot_model_id(
-            current_model,
-            catalog=catalog,
-            api_key=catalog_api_key,
-        )
-        or current_model
-    )
-
-    if catalog:
-        model_list = [item.get("id", "") for item in catalog if item.get("id")]
-        print(f"  Found {len(model_list)} model(s) from GitHub Copilot")
-    else:
-        model_list = _PROVIDER_MODELS.get("copilot", [])
-        if model_list:
-            print(
-                "  ⚠ Could not auto-detect models from GitHub Copilot — showing defaults."
-            )
-            print('    Use "Enter custom model name" if you do not see your model.')
-
-    if model_list:
-        selected = _prompt_model_selection(
-            model_list,
-            current_model=normalized_current_model,
-            confirm_provider=provider_id,
-            confirm_base_url=effective_base,
-            confirm_api_key=catalog_api_key,
-        )
-    else:
-        try:
-            selected = input("Model name: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            selected = None
-
-    if not selected:
-        print("No change.")
-        return
-
-    selected = (
-        normalize_copilot_model_id(
-            selected,
-            catalog=catalog,
-            api_key=catalog_api_key,
-        )
-        or selected
-    )
-    _save_model_choice(selected)
-
-    cfg = load_config()
-    model = cfg.get("model")
-    if not isinstance(model, dict):
-        model = {"default": model} if model else {}
-        cfg["model"] = model
-    model["provider"] = provider_id
-    model["base_url"] = effective_base
-    model["api_mode"] = "chat_completions"
-    clear_model_endpoint_credentials(model, clear_api_mode=False)
-    save_config(cfg)
-    deactivate_provider()
-
-    print(f"Default model set to: {selected} (via {pconfig.name})")
-
-def _model_flow_devin_acp(config, current_model=""):
-    """Devin CLI ACP flow using the local Devin CLI (`devin acp`)."""
-    from hermes_cli.auth import (
-        PROVIDER_REGISTRY,
-        _prompt_model_selection,
-        _save_model_choice,
-        deactivate_provider,
-        get_external_process_provider_status,
-        resolve_external_process_provider_credentials,
-    )
-    from hermes_cli.models import _PROVIDER_MODELS
-    from hermes_cli.config import load_config, save_config
-
-    del config
-
-    provider_id = "devin-acp"
-    pconfig = PROVIDER_REGISTRY[provider_id]
-
-    status = get_external_process_provider_status(provider_id)
-    resolved_command = (
-        status.get("resolved_command") or status.get("command") or "devin"
-    )
-    effective_base = status.get("base_url") or pconfig.inference_base_url
-
-    print("  Devin CLI ACP delegates Hermes turns to `devin acp`.")
-    print("  Hermes keeps the ACP process warm and continues sessions when history grows.")
-    print("  Authenticate with: devin auth login")
-    print(f"  Command: {resolved_command}")
-    print(f"  Backend marker: {effective_base}")
-    if status.get("auth_present") is True:
-        print("  Local credentials: detected")
-    elif status.get("auth_present") is False:
-        print("  Local credentials: missing")
-    if status.get("hint"):
-        print(f"  ⚠ {status['hint']}")
-    print()
-
-    try:
-        creds = resolve_external_process_provider_credentials(provider_id)
-    except Exception as exc:
-        print(f"  ⚠ {exc}")
-        print(
-            "  Install Devin CLI (https://docs.devin.ai/cli) or set "
-            "HERMES_DEVIN_ACP_COMMAND / DEVIN_CLI_PATH."
-        )
-        return
-
-    effective_base = creds.get("base_url") or effective_base
-    # Prefer live Devin CLI discovery (invalid --model → Available: …), then
-    # curated snapshot so the CLI `hermes model` flow matches Desktop picker.
-    try:
-        from hermes_cli.models import cached_provider_model_ids
-
-        model_list = cached_provider_model_ids(provider_id) or _PROVIDER_MODELS.get(
-            "devin-acp", ["devin-acp"]
-        )
-    except Exception:
-        model_list = _PROVIDER_MODELS.get("devin-acp", ["devin-acp"])
-    default_pick = current_model or (model_list[0] if model_list else "devin-acp")
-    selected = _prompt_model_selection(
-        model_list,
-        current_model=default_pick,
-        confirm_provider=provider_id,
-        confirm_base_url=effective_base,
-        confirm_api_key="",
-    )
-    if not selected:
-        try:
-            selected = input("Model name [devin-acp]: ").strip() or "devin-acp"
-        except (KeyboardInterrupt, EOFError):
-            selected = None
-
-    if not selected:
-        print("No change.")
-        return
-
-    _save_model_choice(selected)
-
-    cfg = load_config()
-    model = cfg.get("model")
-    if not isinstance(model, dict):
-        model = {"default": model} if model else {}
-        cfg["model"] = model
-    model["provider"] = provider_id
-    model["base_url"] = effective_base
-    model["api_mode"] = "chat_completions"
-    clear_model_endpoint_credentials(model, clear_api_mode=False)
-    save_config(cfg)
-    deactivate_provider()
-
-    print(f"Default model set to: {selected} (via {pconfig.name})")
-
-
-def _model_flow_grok_acp(config, current_model=""):
-    """Configure Grok Build CLI ACP as the active provider.
-
-    Spawns ``grok --no-auto-update agent stdio`` (JSON-RPC over stdio). Auth
-    is local (`grok login`) or ambient ``XAI_API_KEY`` — Hermes does not store
-    a separate API key for this path.
+    Uses ProviderProfile metadata and cached_provider_model_ids so new
+    external-process plugins do not need a dedicated _model_flow_* function.
     """
     from hermes_cli.auth import (
         PROVIDER_REGISTRY,
@@ -2131,25 +1920,34 @@ def _model_flow_grok_acp(config, current_model=""):
         get_external_process_provider_status,
         resolve_external_process_provider_credentials,
     )
-    from hermes_cli.models import _PROVIDER_MODELS
     from hermes_cli.config import load_config, save_config
+    from hermes_cli.models import cached_provider_model_ids
+    from providers import get_provider_profile
 
     del config
 
-    provider_id = "grok-acp"
-    pconfig = PROVIDER_REGISTRY[provider_id]
+    pconfig = PROVIDER_REGISTRY.get(provider_id)
+    if not pconfig:
+        print(f"Unknown provider: {provider_id}")
+        return
+
+    profile = get_provider_profile(provider_id)
 
     status = get_external_process_provider_status(provider_id)
     resolved_command = (
-        status.get("resolved_command") or status.get("command") or "grok"
+        status.get("resolved_command") or status.get("command") or ""
     )
     effective_base = status.get("base_url") or pconfig.inference_base_url
 
-    print("  Grok CLI ACP delegates Hermes turns to `grok agent stdio`.")
-    print("  Hermes keeps the ACP process warm and continues sessions when history grows.")
-    print("  Authenticate with: grok login  (or set XAI_API_KEY)")
-    print(f"  Command: {resolved_command}")
-    print(f"  Backend marker: {effective_base}")
+    if profile and profile.description:
+        print(f"  {profile.display_name or pconfig.name}")
+        print(f"  {profile.description}")
+    else:
+        print(f"  {pconfig.name}")
+    if resolved_command:
+        print(f"  Command: {resolved_command}")
+    if effective_base:
+        print(f"  Backend marker: {effective_base}")
     if status.get("auth_present") is True:
         print("  Local credentials: detected")
     elif status.get("auth_present") is False:
@@ -2162,22 +1960,19 @@ def _model_flow_grok_acp(config, current_model=""):
         creds = resolve_external_process_provider_credentials(provider_id)
     except Exception as exc:
         print(f"  ⚠ {exc}")
-        print(
-            "  Install Grok Build CLI (https://docs.x.ai/build/cli) or set "
-            "HERMES_GROK_ACP_COMMAND / GROK_CLI_PATH."
-        )
         return
 
     effective_base = creds.get("base_url") or effective_base
-    try:
-        from hermes_cli.models import cached_provider_model_ids
 
-        model_list = cached_provider_model_ids(provider_id) or _PROVIDER_MODELS.get(
-            "grok-acp", ["grok-acp"]
-        )
+    if profile:
+        current_model = profile.normalize_model_id(current_model)
+
+    try:
+        model_list = cached_provider_model_ids(provider_id) or []
     except Exception:
-        model_list = _PROVIDER_MODELS.get("grok-acp", ["grok-acp"])
-    default_pick = current_model or (model_list[0] if model_list else "grok-acp")
+        model_list = []
+
+    default_pick = current_model or (model_list[0] if model_list else provider_id)
     selected = _prompt_model_selection(
         model_list,
         current_model=default_pick,
@@ -2185,15 +1980,13 @@ def _model_flow_grok_acp(config, current_model=""):
         confirm_base_url=effective_base,
         confirm_api_key="",
     )
-    if not selected:
-        try:
-            selected = input("Model name [grok-acp]: ").strip() or "grok-acp"
-        except (KeyboardInterrupt, EOFError):
-            selected = None
 
     if not selected:
         print("No change.")
         return
+
+    if profile:
+        selected = profile.normalize_model_id(selected)
 
     _save_model_choice(selected)
 

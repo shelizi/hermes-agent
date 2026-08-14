@@ -794,9 +794,7 @@ from hermes_cli.model_setup_flows import (
     _model_flow_azure_foundry,
     _model_flow_named_custom,
     _model_flow_copilot,
-    _model_flow_copilot_acp,
-    _model_flow_devin_acp,
-    _model_flow_grok_acp,
+    _model_flow_external_process,
     _model_flow_kimi,
     _model_flow_stepfun,
     _model_flow_bedrock_api_key,
@@ -3097,6 +3095,21 @@ def _is_profile_api_key_provider(provider_id: str) -> bool:
         return False
 
 
+def _is_profile_external_process_provider(provider_id: str) -> bool:
+    """Return True when provider_id maps to a profile with auth_type='external_process'.
+
+    Used as a catch-all in select_provider_and_model() so that ACP/MCP-style
+    providers declared in plugins/model-providers/<name>/ automatically dispatch
+    to _model_flow_external_process without requiring an explicit elif branch.
+    """
+    try:
+        from providers import get_provider_profile
+        _p = get_provider_profile(provider_id)
+        return _p is not None and _p.auth_type == "external_process"
+    except Exception:
+        return False
+
+
 def select_provider_and_model(args=None):
     """Core provider selection + model picking logic.
 
@@ -3480,12 +3493,8 @@ def select_provider_and_model(args=None):
         _model_flow_qwen_oauth(config, current_model)
     elif selected_provider == "minimax-oauth":
         _model_flow_minimax_oauth(config, current_model, args=args)
-    elif selected_provider == "copilot-acp":
-        _model_flow_copilot_acp(config, current_model)
-    elif selected_provider == "devin-acp":
-        _model_flow_devin_acp(config, current_model)
-    elif selected_provider == "grok-acp":
-        _model_flow_grok_acp(config, current_model)
+    elif _is_profile_external_process_provider(selected_provider):
+        _model_flow_external_process(config, selected_provider, current_model)
     elif selected_provider == "copilot":
         _model_flow_copilot(config, current_model)
     elif selected_provider == "custom":

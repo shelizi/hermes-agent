@@ -85,6 +85,17 @@ class ProviderProfile:
         """
         return list(default_args)
 
+    def normalize_model_id(
+        self, model_id: str | None, *, catalog: list[str] | None = None, **context: Any
+    ) -> str:
+        """Normalize a model id entered in setup/picker to the canonical form.
+
+        Default is a pass-through; providers with alias/catalog normalization
+        (e.g. GitHub Copilot ACP) can override this so the core setup flow
+        stays provider-agnostic.
+        """
+        return str(model_id or "").strip()
+
     supports_health_check: bool = True  # False → doctor skips /models probe for this provider
 
     # ── Vision support ────────────────────────────────────────

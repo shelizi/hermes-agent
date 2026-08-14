@@ -3211,15 +3211,13 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
         return get_codex_model_ids(access_token=access_token)
     if normalized == "xai-oauth":
         return list(_PROVIDER_MODELS.get("xai-oauth", _PROVIDER_MODELS.get("xai", [])))
-    if normalized in {"copilot", "copilot-acp"}:
+    if normalized == "copilot":
         try:
             live = _fetch_github_models(_resolve_copilot_catalog_api_key())
             if live:
                 return live
         except Exception:
             pass
-        if normalized == "copilot-acp":
-            return list(_PROVIDER_MODELS.get("copilot", []))
     # External-process ACP/MCP-style providers: ask the plugin profile for
     # its live model list (e.g. Devin/Grok CLI discovery), then fall back to
     # the static catalog. This keeps provider-specific CLI probes in the

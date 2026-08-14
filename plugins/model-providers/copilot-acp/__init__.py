@@ -5,6 +5,8 @@ transport. api_mode="copilot_acp" is handled separately in run_agent.py.
 The profile captures auth + endpoint metadata for registry migration.
 """
 
+from typing import Any
+
 from providers import register_provider
 from providers.base import ProviderProfile
 
@@ -19,8 +21,47 @@ class CopilotACPProfile(ProviderProfile):
         base_url: str | None = None,
         timeout: float = 8.0,
     ) -> list[str] | None:
-        """Model listing is handled by the ACP subprocess."""
-        return None
+        """Fetch GitHub Copilot model catalog to populate the picker.
+
+        Falls back to the ACP placeholder only when the catalog cannot be
+        reached, so the picker is still usable in offline/no-auth scenarios.
+        """
+        try:
+            from hermes_cli.models import _PROVIDER_MODELS, _fetch_github_models
+            from hermes_cli.auth import resolve_api_key_provider_credentials
+
+            fallback = list(_PROVIDER_MODELS.get("copilot", []))
+            try:
+                creds = resolve_api_key_provider_credentials("copilot")
+                catalog_key = str(creds.get("api_key") or "").strip()
+            except Exception:
+                catalog_key = ""
+            if not catalog_key:
+                return fallback or None
+            live = _fetch_github_models(catalog_key, timeout=timeout)
+            return live or fallback or None
+        except Exception:
+            return None
+
+    def normalize_model_id(
+        self, model_id: str | None, *, catalog: list[str] | None = None, **context: Any
+    ) -> str:
+        """Resolve Copilot model aliases against the live GitHub catalog."""
+        from hermes_cli.models import normalize_copilot_model_id
+        from hermes_cli.auth import resolve_api_key_provider_credentials
+
+        api_key = context.get("api_key")
+        if not api_key:
+            try:
+                creds = resolve_api_key_provider_credentials("copilot")
+                api_key = str(creds.get("api_key") or "").strip()
+            except Exception:
+                api_key = None
+        return normalize_copilot_model_id(
+            model_id,
+            catalog=None,
+            api_key=api_key or None,
+        )
 
 
 copilot_acp = CopilotACPProfile(
