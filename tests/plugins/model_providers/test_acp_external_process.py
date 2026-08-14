@@ -7,8 +7,9 @@ as plugins without touching the core.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -177,3 +178,100 @@ class TestAuthUsesProviderProfileHooks:
         command, args = auth._resolve_external_process_command_args("antigravity-acp")
         assert command == "agy-acp"
         assert args == ["__sentinel__"]
+
+
+_DEVIN_SAMPLE_ERR = (
+    "Error: Unknown model: '__hermes_devin_probe__'\n"
+    "Available: adaptive, claude-opus-4.8, swe-1.7, gpt-5.5\n"
+)
+
+_GROK_SAMPLE_OUT = (
+    "Available models:\n"
+    "  * grok-4.5 (default)\n"
+    "  - grok-composer-2.5-fast\n"
+    "  - grok-build-0.1\n"
+)
+
+
+class TestProviderProfileFetchModels:
+    """ProviderProfile.fetch_models discovers ACP model lists from the CLI."""
+
+    def test_devin_profile_fetch_models_runs_cli_probe(self, devin_profile, monkeypatch):
+        mock_proc = MagicMock()
+        mock_proc.stderr = _DEVIN_SAMPLE_ERR
+        mock_proc.stdout = ""
+
+        with patch("subprocess.run", return_value=mock_proc) as run:
+            with patch("shutil.which", return_value="/bin/devin"):
+                models = devin_profile.fetch_models(timeout=1.0)
+
+        assert models == ["adaptive", "claude-opus-4.8", "swe-1.7", "gpt-5.5"]
+        argv = run.call_args[0][0]
+        assert argv[0] == "/bin/devin"
+        assert "--model" in argv
+        assert "-p" in argv
+
+    def test_devin_profile_fetch_models_returns_empty_on_timeout(self, devin_profile, monkeypatch):
+        with patch(
+            "subprocess.run", side_effect=subprocess.TimeoutExpired("devin", 1)
+        ):
+            with patch("shutil.which", return_value="/bin/devin"):
+                models = devin_profile.fetch_models(timeout=1.0)
+        assert models == []
+
+    def test_grok_profile_fetch_models_runs_models_subcommand(self, grok_profile, monkeypatch):
+        mock_proc = MagicMock()
+        mock_proc.stderr = ""
+        mock_proc.stdout = _GROK_SAMPLE_OUT
+
+        with patch("subprocess.run", return_value=mock_proc) as run:
+            with patch("shutil.which", return_value="/bin/grok"):
+                models = grok_profile.fetch_models(timeout=1.0)
+
+        assert models == ["grok-4.5", "grok-composer-2.5-fast", "grok-build-0.1"]
+        argv = run.call_args[0][0]
+        assert argv[0] == "/bin/grok"
+        assert "models" in argv
+
+    def test_grok_profile_fetch_models_returns_empty_on_timeout(self, grok_profile, monkeypatch):
+        with patch(
+            "subprocess.run", side_effect=subprocess.TimeoutExpired("grok", 1)
+        ):
+            with patch("shutil.which", return_value="/bin/grok"):
+                models = grok_profile.fetch_models(timeout=1.0)
+        assert models == []
+
+    def test_provider_model_ids_uses_external_process_profile_fetch_models(
+        self, isolated_providers, monkeypatch
+    ):
+        import hermes_cli.models as models
+        import providers
+
+        devin = providers.get_provider_profile("devin-acp")
+        assert devin is not None
+        monkeypatch.setattr(devin, "search_command_path", lambda _cmd: None)
+        monkeypatch.setattr(devin, "fetch_models", lambda **_: ["__live_devin__"])
+
+        with patch("shutil.which", return_value=None), patch(
+            "subprocess.run", side_effect=FileNotFoundError
+        ):
+            ids = models.provider_model_ids("devin-acp", force_refresh=True)
+        assert ids == ["__live_devin__"]
+
+    def test_provider_model_ids_falls_back_to_curated_when_fetch_models_empty(
+        self, isolated_providers, monkeypatch
+    ):
+        import hermes_cli.models as models
+        import providers
+
+        grok = providers.get_provider_profile("grok-acp")
+        assert grok is not None
+        monkeypatch.setattr(grok, "search_command_path", lambda _cmd: None)
+        monkeypatch.setattr(grok, "fetch_models", lambda **_: [])
+
+        with patch("shutil.which", return_value=None), patch(
+            "subprocess.run", side_effect=FileNotFoundError
+        ):
+            ids = models.provider_model_ids("grok-acp", force_refresh=True)
+        assert "grok-4.5" in ids
+        assert "grok-acp" in ids

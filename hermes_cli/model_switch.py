@@ -2518,9 +2518,9 @@ def list_authenticated_providers(
         }:
             # Use live discovery so the gateway /model picker matches what
             # the authenticated backend serves. Copilot/Codex hit OAuth
-            # /models; Devin CLI has no REST catalog but exposes an
-            # "Available:" list via a cheap invalid-``--model`` probe
-            # (see ``fetch_devin_cli_models``). ``cached_provider_model_ids``
+            # /models; Devin CLI exposes an "Available:" list via a cheap
+            # invalid-``--model`` probe implemented by the plugin's
+            # ``ProviderProfile.fetch_models``. ``cached_provider_model_ids``
             # falls back to curated when live fails.
             model_ids = cached_provider_model_ids(hermes_slug)
         elif overlay.auth_type == "external_process":

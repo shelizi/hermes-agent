@@ -10,6 +10,7 @@ Official ACP entrypoint (xAI docs / Zed ACP registry):
   ``grok agent stdio``
 """
 
+import subprocess
 from pathlib import Path
 
 from providers import register_provider
@@ -24,10 +25,45 @@ class GrokACPProfile(ProviderProfile):
         *,
         api_key: str | None = None,
         base_url: str | None = None,
-        timeout: float = 8.0,
+        timeout: float = 12.0,
     ) -> list[str] | None:
-        """Model listing is handled by the ACP subprocess or hermes_cli.models."""
-        return None
+        """Discover Grok CLI models by running ``grok models``."""
+        try:
+            from hermes_cli.auth import (
+                _resolve_external_process_command_args,
+                _resolve_external_process_command_path,
+            )
+
+            command, _ = _resolve_external_process_command_args(self.name)
+            resolved = _resolve_external_process_command_path(self.name, command)
+        except Exception:
+            return []
+
+        if not resolved:
+            return []
+
+        try:
+            proc = subprocess.run(
+                [resolved, "models"],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return []
+        except Exception:
+            return []
+
+        blob = "\n".join(
+            part for part in (proc.stderr or "", proc.stdout or "") if part
+        )
+        try:
+            from hermes_cli.models import parse_grok_cli_available_models
+
+            return parse_grok_cli_available_models(blob)
+        except Exception:
+            return []
 
     def auth_present(self) -> bool | None:
         """Grok CLI uses XAI_API_KEY or ~/.grok/auth.json."""

@@ -6,10 +6,16 @@ pattern as copilot-acp.
 """
 
 import os
+import subprocess
 from pathlib import Path
 
 from providers import register_provider
 from providers.base import ProviderProfile
+
+
+# Devin CLI does not expose a REST /models endpoint or `devin models` subcommand.
+# Probing with an invalid --model prints: "Available: a, b, c" on stderr.
+_DEVIN_PROBE_MODEL = "__hermes_devin_probe__"
 
 
 class DevinACPProfile(ProviderProfile):
@@ -20,10 +26,45 @@ class DevinACPProfile(ProviderProfile):
         *,
         api_key: str | None = None,
         base_url: str | None = None,
-        timeout: float = 8.0,
+        timeout: float = 12.0,
     ) -> list[str] | None:
-        """Model listing is handled by the ACP subprocess."""
-        return None
+        """Discover Devin CLI models by probing ``devin --model <invalid> -p .``."""
+        try:
+            from hermes_cli.auth import (
+                _resolve_external_process_command_args,
+                _resolve_external_process_command_path,
+            )
+
+            command, _ = _resolve_external_process_command_args(self.name)
+            resolved = _resolve_external_process_command_path(self.name, command)
+        except Exception:
+            return []
+
+        if not resolved:
+            return []
+
+        try:
+            proc = subprocess.run(
+                [resolved, "--model", _DEVIN_PROBE_MODEL, "-p", "."],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return []
+        except Exception:
+            return []
+
+        blob = "\n".join(
+            part for part in (proc.stderr or "", proc.stdout or "") if part
+        )
+        try:
+            from hermes_cli.models import parse_devin_cli_available_models
+
+            return parse_devin_cli_available_models(blob)
+        except Exception:
+            return []
 
     def auth_present(self) -> bool | None:
         """Devin CLI writes a local credentials.toml; probe it without loading secrets."""

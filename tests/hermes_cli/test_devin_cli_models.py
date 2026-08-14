@@ -5,11 +5,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
-from hermes_cli.models import (
-    fetch_devin_cli_models,
-    parse_devin_cli_available_models,
-    provider_model_ids,
-)
+import providers
+from hermes_cli.models import parse_devin_cli_available_models, provider_model_ids
 
 
 SAMPLE_ERR = (
@@ -33,13 +30,17 @@ class TestParseDevinAvailable(unittest.TestCase):
 
 
 class TestFetchDevinCliModels(unittest.TestCase):
+    def setUp(self):
+        self.devin = providers.get_provider_profile("devin-acp")
+        self.assertIsNotNone(self.devin)
+
     def test_fetch_parses_stderr(self):
         mock_proc = MagicMock()
         mock_proc.stderr = SAMPLE_ERR
         mock_proc.stdout = ""
         with patch("subprocess.run", return_value=mock_proc) as run:
             with patch("shutil.which", return_value="/bin/devin"):
-                models = fetch_devin_cli_models(command="devin")
+                models = self.devin.fetch_models(timeout=1.0)
         self.assertEqual(models, ["adaptive", "claude-opus-4.8", "swe-1.7", "gpt-5.5"])
         argv = run.call_args[0][0]
         self.assertEqual(argv[0], "/bin/devin")
@@ -54,19 +55,18 @@ class TestFetchDevinCliModels(unittest.TestCase):
             side_effect=subprocess.TimeoutExpired(cmd="devin", timeout=1),
         ):
             with patch("shutil.which", return_value="/bin/devin"):
-                self.assertEqual(fetch_devin_cli_models(command="devin"), [])
+                self.assertEqual(self.devin.fetch_models(timeout=1.0), [])
 
     def test_provider_model_ids_uses_live(self):
-        with patch(
-            "hermes_cli.models.fetch_devin_cli_models",
-            return_value=["swe-1.7", "claude-opus-4.8"],
+        with patch.object(
+            self.devin, "fetch_models", return_value=["swe-1.7", "claude-opus-4.8"]
         ):
-            ids = provider_model_ids("devin-acp")
+            ids = provider_model_ids("devin-acp", force_refresh=True)
         self.assertEqual(ids, ["swe-1.7", "claude-opus-4.8"])
 
     def test_provider_model_ids_falls_back_to_curated(self):
-        with patch("hermes_cli.models.fetch_devin_cli_models", return_value=[]):
-            ids = provider_model_ids("devin-acp")
+        with patch.object(self.devin, "fetch_models", return_value=[]):
+            ids = provider_model_ids("devin-acp", force_refresh=True)
         self.assertIn("swe-1.7", ids)
         self.assertIn("claude-opus-4.8", ids)
         self.assertIn("devin-acp", ids)

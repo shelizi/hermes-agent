@@ -3125,73 +3125,6 @@ def parse_devin_cli_available_models(text: str) -> list[str]:
     return out
 
 
-def fetch_devin_cli_models(
-    *,
-    command: Optional[str] = None,
-    timeout: float = 12.0,
-) -> list[str]:
-    """Discover Devin CLI models by probing ``devin --model <invalid> -p .``.
-
-    Returns [] when the CLI is missing, times out, or does not emit an
-    Available line. Never raises for expected probe failures.
-    """
-    import shutil
-    import subprocess
-
-    cmd = (command or "").strip()
-    # Preserve the historical behavior for explicit commands and PATH-based
-    # shims. The shared resolver adds the official Windows Devin install
-    # fallback when normal PATH lookup fails.
-    resolved = shutil.which(cmd) if cmd else None
-    if not resolved and cmd and (os.sep in cmd or "/" in cmd):
-        resolved = cmd
-    if not cmd:
-        try:
-            from hermes_cli.auth import (
-                _resolve_external_process_command_args,
-            )
-
-            cmd, _args = _resolve_external_process_command_args("devin-acp")
-        except Exception:
-            cmd = (
-                os.getenv("HERMES_DEVIN_ACP_COMMAND", "").strip()
-                or os.getenv("DEVIN_CLI_PATH", "").strip()
-                or "devin"
-            )
-    if not resolved and cmd:
-        try:
-            from hermes_cli.auth import _resolve_external_process_command_path
-
-            resolved = _resolve_external_process_command_path("devin-acp", cmd)
-        except Exception:
-            pass
-    # Keep an explicit path as-is; the shared resolver handles PATH and the
-    # official per-user Devin install location.
-    if not resolved:
-        resolved = cmd if cmd else None
-    if not resolved:
-        return []
-
-    try:
-        proc = subprocess.run(
-            [resolved, "--model", _DEVIN_PROBE_MODEL, "-p", "."],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return []
-    except Exception:
-        return []
-
-    blob = "\n".join(
-        part for part in (proc.stderr or "", proc.stdout or "") if part
-    )
-    models = parse_devin_cli_available_models(blob)
-    return models
-
-
 def parse_grok_cli_available_models(text: str) -> list[str]:
     """Parse the ``Available models:`` list emitted by ``grok models``.
 
@@ -3224,71 +3157,6 @@ def parse_grok_cli_available_models(text: str) -> list[str]:
         seen.add(key)
         out.append(model_id)
     return out
-
-
-def fetch_grok_cli_models(
-    *,
-    command: Optional[str] = None,
-    timeout: float = 12.0,
-) -> list[str]:
-    """Discover Grok CLI models by running ``grok models``.
-
-    Returns [] when the CLI is missing, times out, or does not emit an
-    Available line. Never raises for expected probe failures.
-    """
-    import shutil
-    import subprocess
-
-    cmd = (command or "").strip()
-    resolved = None
-    if cmd:
-        resolved = shutil.which(cmd) if os.sep not in cmd and "/" not in cmd else cmd
-    if not cmd:
-        try:
-            from hermes_cli.auth import (
-                _resolve_external_process_command_args,
-                _resolve_external_process_command_path,
-            )
-
-            cmd, _args = _resolve_external_process_command_args("grok-acp")
-            resolved = _resolve_external_process_command_path("grok-acp", cmd)
-        except Exception:
-            cmd = (
-                os.getenv("HERMES_GROK_ACP_COMMAND", "").strip()
-                or os.getenv("GROK_CLI_PATH", "").strip()
-                or "grok"
-            )
-    if not resolved and cmd:
-        try:
-            from hermes_cli.auth import _resolve_external_process_command_path
-
-            resolved = _resolve_external_process_command_path("grok-acp", cmd)
-        except Exception:
-            pass
-    if not resolved:
-        resolved = shutil.which(cmd) if cmd else None
-    if not resolved:
-        resolved = cmd if cmd else None
-    if not resolved:
-        return []
-
-    try:
-        proc = subprocess.run(
-            [resolved, "models"],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return []
-    except Exception:
-        return []
-
-    blob = "\n".join(
-        part for part in (proc.stderr or "", proc.stdout or "") if part
-    )
-    return parse_grok_cli_available_models(blob)
 
 
 def _openai_discovery_base_url(provider: str) -> str:
@@ -3355,22 +3223,20 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
             pass
         if normalized == "copilot-acp":
             return list(_PROVIDER_MODELS.get("copilot", []))
-    if normalized == "devin-acp":
-        try:
-            live = fetch_devin_cli_models()
+    # External-process ACP/MCP-style providers: ask the plugin profile for
+    # its live model list (e.g. Devin/Grok CLI discovery), then fall back to
+    # the static catalog. This keeps provider-specific CLI probes in the
+    # plugin instead of branching on provider names here.
+    try:
+        from providers import get_provider_profile
+
+        _p = get_provider_profile(normalized)
+        if _p and _p.auth_type == "external_process":
+            live = _p.fetch_models(timeout=12.0)
             if live:
                 return live
-        except Exception:
-            pass
-        return list(_PROVIDER_MODELS.get("devin-acp", ["devin-acp"]))
-    if normalized == "grok-acp":
-        try:
-            live = fetch_grok_cli_models()
-            if live:
-                return live
-        except Exception:
-            pass
-        return list(_PROVIDER_MODELS.get("grok-acp", ["grok-acp"]))
+    except Exception:
+        pass
     if normalized == "nous":
         # Try live Nous Portal /models endpoint
         try:
