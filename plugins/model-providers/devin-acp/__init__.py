@@ -5,6 +5,9 @@ chat-completions endpoint. Routing is handled by DevinACPClient, same
 pattern as copilot-acp.
 """
 
+import os
+from pathlib import Path
+
 from providers import register_provider
 from providers.base import ProviderProfile
 
@@ -30,6 +33,33 @@ class DevinACPProfile(ProviderProfile):
             return _devin_local_credentials_present()
         except Exception:
             return None
+
+    def search_command_path(self, command: str) -> str | None:
+        r"""Devin CLI installer keeps the binary under %LOCALAPPDATA%\devin\cli\bin."""
+        command_name = Path(command).name.casefold()
+        if command_name not in {"devin", "devin.exe"}:
+            return None
+
+        roots: list[Path] = []
+        for env_name in ("LOCALAPPDATA", "APPDATA"):
+            raw_root = os.getenv(env_name, "").strip()
+            if raw_root:
+                roots.append(Path(raw_root))
+        roots.append(Path.home() / "AppData" / "Local")
+
+        seen: set[str] = set()
+        for root in roots:
+            candidate = root / "devin" / "cli" / "bin" / "devin.exe"
+            key = str(candidate).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                if candidate.is_file():
+                    return str(candidate)
+            except OSError:
+                continue
+        return None
 
 
 devin_acp = DevinACPProfile(

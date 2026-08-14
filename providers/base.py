@@ -67,6 +67,24 @@ class ProviderProfile:
         """Return True/False when local credentials are present; None if unknown."""
         return None
 
+    def search_command_path(self, command: str) -> str | None:
+        """Return a known install-path absolute path for *command*, or None.
+
+        Used as a fallback after ``shutil.which`` fails. External-process
+        providers (ACP/MCP-style) can override this to search their official
+        per-user install directories without hard-coding provider names in
+        hermes_cli/auth.py.
+        """
+        return None
+
+    def resolve_command_args(self, command: str, default_args: list[str]) -> list[str]:
+        """Return the launch args for *command* given the profile's defaults.
+
+        Override to filter default args when the resolved binary is an adapter
+        rather than the native CLI (e.g. antigravity-acp adapters).
+        """
+        return list(default_args)
+
     supports_health_check: bool = True  # False → doctor skips /models probe for this provider
 
     # ── Vision support ────────────────────────────────────────

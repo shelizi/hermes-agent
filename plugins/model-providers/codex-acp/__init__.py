@@ -6,6 +6,7 @@ as copilot-acp, devin-acp, grok-acp and antigravity-acp.
 """
 
 import os
+from pathlib import Path
 
 from providers import register_provider
 from providers.base import ProviderProfile
@@ -30,6 +31,29 @@ class CodexACPProfile(ProviderProfile):
             os.environ.get("CODEX_API_KEY", "").strip()
             or os.environ.get("OPENAI_API_KEY", "").strip()
         )
+
+    def search_command_path(self, command: str) -> str | None:
+        """Codex ACP adapter is installed via npm; search common prefixes."""
+        command_name = Path(command).name.casefold()
+        if command_name not in {
+            "codex-acp",
+            "codex-acp.cmd",
+            "codex-acp.exe",
+        }:
+            return None
+
+        home = Path.home()
+        for candidate in (
+            home / ".hermes" / "codex-acp" / "node_modules" / ".bin" / "codex-acp",
+            home / ".hermes" / "codex-acp" / "node_modules" / ".bin" / "codex-acp.cmd",
+            home / ".npm" / "bin" / "codex-acp",
+        ):
+            try:
+                if candidate.is_file():
+                    return str(candidate)
+            except OSError:
+                continue
+        return None
 
 
 codex_acp = CodexACPProfile(

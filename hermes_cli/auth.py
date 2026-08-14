@@ -7127,14 +7127,15 @@ def _resolve_external_process_command_args(provider_id: str) -> tuple[str, list[
         default_args = spec.get("default_args")
         args = list(["--acp", "--stdio"] if default_args is None else default_args)
 
-    # Antigravity ACP: adapter binaries (agy-acp, antigravity-acp, etc.) are
-    # already in ACP server mode; only the native ``agy`` binary needs the
-    # ``--acp`` launch flag. If no args env override is set and the resolved
-    # command is not the native binary, drop the default ``--acp`` flag.
-    if provider_id == "antigravity-acp":
-        command_name = Path(command).name.casefold()
-        if command_name not in {"agy", "agy.exe", "antigravity", "antigravity.exe"}:
-            args = []
+    # Let the provider profile filter default args (e.g. antigravity adapters).
+    try:
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(provider_id)
+        if profile:
+            args = profile.resolve_command_args(command, args)
+    except Exception:
+        pass
 
     return command, args
 
@@ -7145,12 +7146,9 @@ def _resolve_external_process_command_path(
 ) -> str | None:
     """Resolve an external-process command, including known install paths.
 
-    Devin's Windows installer keeps the active binary under the per-user
-    ``%LOCALAPPDATA%\\devin\\cli\\bin`` directory but does not necessarily add
-    that directory to PATH.  Grok Build CLI installs under ``~/.grok/bin/``.
-    Hermes must therefore resolve those official install locations before
-    declaring the provider unavailable. Explicit command/path overrides and
-    normal PATH resolution always take precedence.
+    Provider-specific install-path search lives in the plugin's
+    ``ProviderProfile.search_command_path()`` hook. Explicit command/path
+    overrides and normal PATH resolution always take precedence.
     """
     if command is None:
         command, _ = _resolve_external_process_command_args(provider_id)
@@ -7162,78 +7160,16 @@ def _resolve_external_process_command_path(
     if resolved:
         return resolved
 
-    command_name = Path(command).name.casefold()
+    try:
+        from providers import get_provider_profile
 
-    if provider_id == "antigravity-acp":
-        # Antigravity CLI binary is ``agy``. Official installer puts it under
-        # ``~/.antigravity/bin/``; package managers (scoop, etc.) put it on PATH.
-        if command_name not in {"agy", "agy.exe"}:
-            return None
-        home = Path.home()
-        for candidate in (
-            home / ".antigravity" / "bin" / "agy.exe",
-            home / ".antigravity" / "bin" / "agy",
-        ):
-            if candidate.is_file():
-                return str(candidate)
-        return None
-
-    if provider_id == "codex-acp":
-        # Codex ACP adapter is installed via npm. Check the local Hermes-managed
-        # prefix and the per-user npm global prefix.
-        if command_name not in {
-            "codex-acp",
-            "codex-acp.cmd",
-            "codex-acp.exe",
-        }:
-            return None
-        home = Path.home()
-        for candidate in (
-            home / ".hermes" / "codex-acp" / "node_modules" / ".bin" / "codex-acp",
-            home / ".hermes" / "codex-acp" / "node_modules" / ".bin" / "codex-acp.cmd",
-            home / ".npm" / "bin" / "codex-acp",
-        ):
-            if candidate.is_file():
-                return str(candidate)
-        return None
-
-    if provider_id == "grok-acp":
-        # Only auto-lookup the default command name; respect explicit overrides.
-        if command_name not in {"grok", "grok.exe"}:
-            return None
-        home = Path.home()
-        for candidate in (
-            home / ".grok" / "bin" / "grok.exe",
-            home / ".grok" / "bin" / "grok",
-        ):
-            if candidate.is_file():
-                return str(candidate)
-        return None
-
-    if provider_id != "devin-acp":
-        return None
-
-    # Only apply the automatic install lookup to the default command name.
-    # A missing explicit override should remain a useful, actionable error.
-    if command_name not in {"devin", "devin.exe"}:
-        return None
-
-    roots: list[Path] = []
-    for env_name in ("LOCALAPPDATA", "APPDATA"):
-        raw_root = os.getenv(env_name, "").strip()
-        if raw_root:
-            roots.append(Path(raw_root))
-    roots.append(Path.home() / "AppData" / "Local")
-
-    seen: set[str] = set()
-    for root in roots:
-        candidate = root / "devin" / "cli" / "bin" / "devin.exe"
-        key = str(candidate).casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        if candidate.is_file():
-            return str(candidate)
+        profile = get_provider_profile(provider_id)
+        if profile:
+            resolved = profile.search_command_path(command)
+            if resolved:
+                return resolved
+    except Exception:
+        pass
 
     return None
 

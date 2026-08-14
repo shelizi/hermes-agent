@@ -10,6 +10,8 @@ Official ACP entrypoint (xAI docs / Zed ACP registry):
   ``grok agent stdio``
 """
 
+from pathlib import Path
+
 from providers import register_provider
 from providers.base import ProviderProfile
 
@@ -35,6 +37,24 @@ class GrokACPProfile(ProviderProfile):
             return _grok_local_credentials_present()
         except Exception:
             return None
+
+    def search_command_path(self, command: str) -> str | None:
+        """Grok Build CLI installs under ~/.grok/bin."""
+        command_name = Path(command).name.casefold()
+        if command_name not in {"grok", "grok.exe"}:
+            return None
+
+        home = Path.home()
+        for candidate in (
+            home / ".grok" / "bin" / "grok.exe",
+            home / ".grok" / "bin" / "grok",
+        ):
+            try:
+                if candidate.is_file():
+                    return str(candidate)
+            except OSError:
+                continue
+        return None
 
 
 grok_acp = GrokACPProfile(

@@ -6,6 +6,8 @@ handled by :class:`agent.antigravity_acp_client.AntigravityACPClient`, same
 pattern as copilot-acp, devin-acp and grok-acp.
 """
 
+from pathlib import Path
+
 from providers import register_provider
 from providers.base import ProviderProfile
 
@@ -22,6 +24,34 @@ class AntigravityACPProfile(ProviderProfile):
     ) -> list[str] | None:
         """Model listing is handled by the ACP subprocess or hermes_cli.models."""
         return None
+
+    def search_command_path(self, command: str) -> str | None:
+        """Antigravity CLI installs under ~/.antigravity/bin."""
+        command_name = Path(command).name.casefold()
+        if command_name not in {"agy", "agy.exe"}:
+            return None
+
+        home = Path.home()
+        for candidate in (
+            home / ".antigravity" / "bin" / "agy.exe",
+            home / ".antigravity" / "bin" / "agy",
+        ):
+            try:
+                if candidate.is_file():
+                    return str(candidate)
+            except OSError:
+                continue
+        return None
+
+    def resolve_command_args(self, command: str, default_args: list[str]) -> list[str]:
+        """Adapter binaries (agy-acp, antigravity-acp, etc.) are already ACP servers.
+
+        Only the native ``agy`` binary needs the ``--acp`` launch flag.
+        """
+        command_name = Path(command).name.casefold()
+        if command_name not in {"agy", "agy.exe", "antigravity", "antigravity.exe"}:
+            return []
+        return list(default_args)
 
 
 antigravity_acp = AntigravityACPProfile(
