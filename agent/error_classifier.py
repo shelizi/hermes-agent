@@ -18,6 +18,12 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Synthetic error code used when the OpenAI SDK rejects a provider's SSE
+# ``data:`` field before Hermes receives a completion chunk.  Keeping this
+# distinct from generic JSON parse failures lets the classifier make narrow,
+# provider-stream-specific recovery decisions without inventing an HTTP status.
+PROVIDER_STREAM_NON_JSON_ERROR_CODE = "provider_stream_non_json_data"
+
 
 # ── Error taxonomy ──────────────────────────────────────────────────────
 
@@ -108,6 +114,8 @@ _BILLING_PATTERNS = [
     "credit balance",
     "credits exhausted",
     "credits have been exhausted",
+    "requires available credits",
+    "account balance is too low",
     "no usable credits",
     "top up your credits",
     "payment required",
@@ -648,6 +656,7 @@ def classify_api_error(
     """Classify an API error into a structured recovery recommendation.
 
     Priority-ordered pipeline:
+      0. Plugin ``transform_api_error_classification`` hooks (first valid result wins)
       1. Special-case provider-specific patterns (thinking sigs, tier gates)
       2. HTTP status code + message-aware refinement
       3. Error code classification (from body)
@@ -730,6 +739,41 @@ def classify_api_error(
         }
         defaults.update(overrides)
         return ClassifiedError(**defaults)
+
+    # ── 0. Plugin classifiers (first valid result wins) ─────────────
+    #
+    # Consulted BEFORE the built-in pipeline so a provider plugin can both
+    # add classifications the core patterns miss and correct ones they get
+    # wrong for its provider (see the ``transform_api_error_classification`` entry in
+    # hermes_cli.plugins.VALID_HOOKS for the callback contract). Callback
+    # exceptions are isolated inside invoke_hook and malformed returns are
+    # dropped by the helper, so a broken plugin can never break
+    # classification — the guard here only covers import/dispatch failure.
+    try:
+        from hermes_cli.plugins import get_plugin_error_classification
+        plugin_classification = get_plugin_error_classification(
+            provider=provider,
+            model=model,
+            status_code=status_code,
+            error_type=error_type,
+            error_code=error_code,
+            error_message=error_msg,
+            error_body=body,
+            error=error,
+            approx_tokens=approx_tokens,
+            context_length=context_length,
+            num_messages=num_messages,
+        )
+    except Exception as exc:
+        logger.debug("Plugin error classification unavailable: %s", exc)
+        plugin_classification = None
+    if plugin_classification is not None:
+        reason = plugin_classification.pop("reason")
+        logger.info(
+            "API error classified by plugin hook: %s (provider=%s, status=%s)",
+            reason.value, provider, status_code,
+        )
+        return _result(reason, **plugin_classification)
 
     # ── 1. Provider-specific patterns (highest priority) ────────────
 
@@ -1550,6 +1594,20 @@ def _classify_by_error_code(
 ) -> Optional[ClassifiedError]:
     """Classify by structured error codes from the response body."""
     code_lower = error_code.lower()
+
+    if (
+        code_lower == PROVIDER_STREAM_NON_JSON_ERROR_CODE
+        and "request validation failed:" in error_msg
+    ):
+        # Some OpenAI-compatible endpoints encode deterministic request
+        # validation failures as plain-text ``event: error`` SSE data behind
+        # HTTP 200.  Retrying the unchanged request cannot succeed, but a
+        # configured provider fallback still may.
+        return result_fn(
+            FailoverReason.format_error,
+            retryable=False,
+            should_fallback=True,
+        )
 
     if code_lower in {"resource_exhausted", "throttled", "rate_limit_exceeded"}:
         return result_fn(
