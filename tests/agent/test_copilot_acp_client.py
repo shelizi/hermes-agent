@@ -26,7 +26,6 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
 
 
 
-    @unittest.skip("_create_chat_completion stream path uses _run_conversation_prompt in BaseACPClient; test needs refactor")
     def test_stream_true_preserves_tool_call_deltas(self) -> None:
         tool_response = (
             "<tool_call>"
@@ -41,8 +40,7 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
                 messages=[{"role": "user", "content": "read README.md"}],
                 stream=True,
             )
-
-        chunks = list(stream)
+            chunks = list(stream)
         delta = chunks[0].choices[0].delta
         self.assertIsNone(delta.content)
         self.assertEqual(chunks[0].choices[0].finish_reason, "tool_calls")
