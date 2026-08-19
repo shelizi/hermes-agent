@@ -62,16 +62,17 @@ def _acp_supported(command: str, args: list[str]) -> bool | None:
     try:
         probe = subprocess.run(
             [command, "--help"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
     if probe.returncode != 0:
         # --help itself failed; can't tell anything about --acp.
         return None
+    stdout = probe.stdout or ""
     # Match ``--acp`` as a flag in the help text; tolerate spacing and
     # variants like ``[--acp]``.
-    verdict = bool(re.search(r"(?:^|[\s\[])--acp(?:[\s=\],]|$)", probe.stdout, re.MULTILINE))
+    verdict = bool(re.search(r"(?:^|[\s\[])--acp(?:[\s=\],]|$)", stdout, re.MULTILINE))
     _ACP_PROBE_CACHE[command] = verdict
     return verdict
 
