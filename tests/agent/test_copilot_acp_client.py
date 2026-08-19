@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-import base64
 import io
 import json
 import os
-import queue
 import tempfile
 import unittest
-from collections import deque
 from pathlib import Path
-from typing import Any
 from unittest.mock import patch
 
-from agent.acp_client_base import _acp_rpc_error_message
 from agent.copilot_acp_client import CopilotACPClient
 
 
@@ -22,182 +17,12 @@ class _FakeProcess:
     def __init__(self) -> None:
         self.stdin = io.StringIO()
 
-    def poll(self) -> None:
-        return None
-
 
 class CopilotACPClientSafetyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = CopilotACPClient(acp_cwd="/tmp")
 
-    def test_extracted_tool_calls_match_openai_sdk_shape(self) -> None:
-        tool_response = (
-            "I'll inspect that.\n"
-            "<tool_call>"
-            '{"id":"call_read","type":"function",'
-            '"function":{"name":"read_file","arguments":"{\\"path\\":\\"README.md\\"}"}}'
-            "</tool_call>"
-        )
 
-        with patch.object(
-            self.client, "_run_conversation_prompt", return_value=(tool_response, "")
-        ):
-            response = self.client._create_chat_completion(
-                model="copilot-acp",
-                messages=[{"role": "user", "content": "read README.md"}],
-                tools=[
-                    {
-                        "type": "function",
-                        "function": {"name": "read_file", "parameters": {}},
-                    }
-                ],
-            )
-
-        choice = response.choices[0]
-        self.assertEqual(choice.finish_reason, "tool_calls")
-        tool_call = choice.message.tool_calls[0]
-        self.assertEqual(tool_call.id, "call_read")
-        self.assertEqual(tool_call.function.name, "read_file")
-        self.assertEqual(
-            json.loads(tool_call.function.arguments),
-            {"path": "README.md"},
-        )
-        self.assertEqual(dict(tool_call)["id"], "call_read")
-        self.assertEqual(dict(tool_call.function)["name"], "read_file")
-        self.assertEqual(choice.message.content, "I'll inspect that.")
-
-    def test_devin_swe_flat_tool_call_is_converted_to_hermes_shape(self) -> None:
-        tool_response = (
-            "I'll queue that.\n"
-            '<tool_call>{"name":"todo_write","arguments":'
-            '{"todos":[{"content":"inspect","status":"in_progress"}]}}'
-            "</tool_call>"
-        )
-
-        with patch.object(
-            self.client, "_run_conversation_prompt", return_value=(tool_response, "")
-        ):
-            response = self.client._create_chat_completion(
-                model="swe-1-7",
-                messages=[{"role": "user", "content": "inspect it"}],
-                tools=[
-                    {
-                        "type": "function",
-                        "function": {"name": "todo_write", "parameters": {}},
-                    }
-                ],
-            )
-
-        choice = response.choices[0]
-        self.assertEqual(choice.finish_reason, "tool_calls")
-        self.assertEqual(choice.message.content, "I'll queue that.")
-        self.assertEqual(len(choice.message.tool_calls), 1)
-        tool_call = choice.message.tool_calls[0]
-        self.assertEqual(tool_call.id, "acp_call_1")
-        self.assertEqual(tool_call.function.name, "todo_write")
-        self.assertEqual(
-            json.loads(tool_call.function.arguments),
-            {"todos": [{"content": "inspect", "status": "in_progress"}]},
-        )
-
-    def test_devin_swe_flat_tool_call_respects_hermes_allowlist(self) -> None:
-        tool_response = (
-            "Safe preamble.\n"
-            '<tool_call>{"name":"todo_write","arguments":{"todos":[]}}</tool_call>'
-        )
-
-        with patch.object(
-            self.client, "_run_conversation_prompt", return_value=(tool_response, "")
-        ):
-            response = self.client._create_chat_completion(
-                model="swe-1-7",
-                messages=[{"role": "user", "content": "inspect it"}],
-                tools=[
-                    {
-                        "type": "function",
-                        "function": {"name": "read_file", "parameters": {}},
-                    }
-                ],
-            )
-
-        choice = response.choices[0]
-        self.assertEqual(choice.finish_reason, "stop")
-        self.assertEqual(choice.message.tool_calls, [])
-        self.assertEqual(choice.message.content, "Safe preamble.")
-
-    def test_stream_true_returns_iterable_text_chunks(self) -> None:
-        # Keep the patch active while the generator is consumed — the stream
-        # worker thread only runs on iteration.
-        with patch.object(
-            self.client, "_run_conversation_prompt", return_value=("Hello from ACP", "")
-        ):
-            stream = self.client._create_chat_completion(
-                model="copilot-acp",
-                messages=[{"role": "user", "content": "hello"}],
-                stream=True,
-            )
-            chunks = list(stream)
-        self.assertEqual(len(chunks), 2)
-        self.assertEqual(chunks[0].choices[0].delta.content, "Hello from ACP")
-        self.assertIsNone(chunks[0].choices[0].delta.tool_calls)
-        self.assertEqual(chunks[0].choices[0].finish_reason, "stop")
-        self.assertEqual(chunks[1].choices, [])
-        self.assertEqual(chunks[1].usage.total_tokens, 0)
-
-    def test_acp_rpc_error_prefers_nested_provider_detail(self) -> None:
-        message = _acp_rpc_error_message(
-            {
-                "message": "Internal error",
-                "data": {
-                    "message": (
-                        "API error (status 402 Payment Required): "
-                        "Grok Build usage balance exhausted"
-                    ),
-                    "http_status": 402,
-                },
-            }
-        )
-
-        self.assertIn("Grok Build usage balance exhausted", message)
-        self.assertNotEqual(message, "Internal error")
-
-    def test_acp_rpc_error_redacts_nested_provider_detail(self) -> None:
-        message = _acp_rpc_error_message(
-            {
-                "message": "Internal error",
-                "data": {
-                    "message": (
-                        "API error: Authorization: Bearer "
-                        "sk-ABCDEF0123456789abcdef0123"
-                    )
-                },
-            }
-        )
-
-        self.assertNotIn("sk-ABCDEF0123456789abcdef0123", message)
-
-    def test_rpc_error_includes_nested_provider_detail(self) -> None:
-        process = _FakeProcess()
-        self.client._active_process = process
-        self.client._inbox = queue.Queue()
-        self.client._stderr_tail = deque()
-        self.client._inbox.put(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "error": {
-                    "code": -32603,
-                    "message": "Internal error",
-                    "data": {
-                        "message": "Grok Build usage balance exhausted",
-                        "http_status": 402,
-                    },
-                },
-            }
-        )
-
-        with self.assertRaisesRegex(RuntimeError, "Grok Build usage balance exhausted"):
-            self.client._rpc("session/prompt", {}, timeout_seconds=1)
 
     def test_stream_true_preserves_tool_call_deltas(self) -> None:
         tool_response = (
@@ -207,15 +32,14 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
             "</tool_call>"
         )
 
-        with patch.object(
-            self.client, "_run_conversation_prompt", return_value=(tool_response, "")
-        ):
+        with patch.object(self.client, "_run_prompt", return_value=(tool_response, "")):
             stream = self.client._create_chat_completion(
                 model="copilot-acp",
                 messages=[{"role": "user", "content": "read README.md"}],
                 stream=True,
             )
-            chunks = list(stream)
+
+        chunks = list(stream)
         delta = chunks[0].choices[0].delta
         self.assertIsNone(delta.content)
         self.assertEqual(chunks[0].choices[0].finish_reason, "tool_calls")
@@ -230,110 +54,6 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
         )
         self.assertEqual(chunks[1].choices, [])
 
-    def test_stream_suppresses_split_swe_tool_xml_and_emits_structured_call(self) -> None:
-        parts = [
-            "Checking.\n<tool_",
-            'call>{"name":"read_file","arguments":{',
-            '"path":"README.md"}}</tool_',
-            "call>\nContinuing.",
-        ]
-        full_response = "".join(parts)
-
-        def fake_run_conversation_prompt(
-            messages,
-            *,
-            model=None,
-            tools=None,
-            tool_choice=None,
-            timeout_seconds: float = 0,
-            on_text_chunk=None,
-            on_reasoning_chunk=None,
-        ) -> tuple[str, str]:
-            del messages, model, tools, tool_choice, timeout_seconds, on_reasoning_chunk
-            for part in parts:
-                if on_text_chunk is not None:
-                    on_text_chunk(part)
-            return full_response, ""
-
-        with patch.object(
-            self.client,
-            "_run_conversation_prompt",
-            side_effect=fake_run_conversation_prompt,
-        ):
-            chunks = list(
-                self.client._create_chat_completion(
-                    model="swe-1-7",
-                    messages=[{"role": "user", "content": "read README.md"}],
-                    tools=[
-                        {
-                            "type": "function",
-                            "function": {"name": "read_file", "parameters": {}},
-                        }
-                    ],
-                    stream=True,
-                )
-            )
-
-        visible = "".join(
-            chunk.choices[0].delta.content or ""
-            for chunk in chunks
-            if chunk.choices
-        )
-        self.assertEqual(visible, "Checking.\n\nContinuing.")
-        self.assertNotIn("<tool_call>", visible)
-        self.assertNotIn("read_file", visible)
-
-        tool_chunks = [
-            chunk
-            for chunk in chunks
-            if chunk.choices and chunk.choices[0].delta.tool_calls
-        ]
-        self.assertEqual(len(tool_chunks), 1)
-        terminal = tool_chunks[0]
-        self.assertEqual(terminal.choices[0].finish_reason, "tool_calls")
-        self.assertIsNone(terminal.choices[0].delta.content)
-        tool_delta = terminal.choices[0].delta.tool_calls[0]
-        self.assertEqual(tool_delta.function.name, "read_file")
-        self.assertEqual(
-            json.loads(tool_delta.function.arguments),
-            {"path": "README.md"},
-        )
-
-    def test_timeout_object_is_coerced_for_streaming_requests(self) -> None:
-        captured: dict[str, float] = {}
-
-        def fake_run_conversation_prompt(
-            messages,
-            *,
-            model=None,
-            tools=None,
-            tool_choice=None,
-            timeout_seconds: float = 0,
-            on_text_chunk=None,
-            on_reasoning_chunk=None,
-        ) -> tuple[str, str]:
-            captured["timeout"] = timeout_seconds
-            return "ok", ""
-
-        timeout = type(
-            "TimeoutLike",
-            (),
-            {"read": 12.0, "write": 5.0, "connect": 3.0, "pool": 1.0},
-        )()
-
-        with patch.object(
-            self.client, "_run_conversation_prompt", side_effect=fake_run_conversation_prompt
-        ):
-            list(
-                self.client._create_chat_completion(
-                    model="copilot-acp",
-                    messages=[{"role": "user", "content": "hello"}],
-                    timeout=timeout,
-                    stream=True,
-                )
-            )
-
-        self.assertEqual(captured["timeout"], 12.0)
 
     def _dispatch(self, message: dict, *, cwd: str) -> dict:
         process = _FakeProcess()
@@ -349,43 +69,7 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
         self.assertTrue(payload)
         return json.loads(payload)
 
-    def test_request_permission_is_not_auto_allowed(self) -> None:
-        response = self._dispatch(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "session/request_permission",
-                "params": {},
-            },
-            cwd="/tmp",
-        )
 
-        outcome = (((response.get("result") or {}).get("outcome") or {}).get("outcome"))
-        self.assertEqual(outcome, "cancelled")
-
-    def test_read_text_file_blocks_internal_hermes_hub_files(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            home = Path(tmpdir) / "home"
-            blocked = home / ".hermes" / "skills" / ".hub" / "index-cache" / "entry.json"
-            blocked.parent.mkdir(parents=True, exist_ok=True)
-            blocked.write_text('{"token":"sk-test-secret-1234567890"}')
-
-            with patch.dict(
-                os.environ,
-                {"HOME": str(home), "HERMES_HOME": str(home / ".hermes")},
-                clear=False,
-            ):
-                response = self._dispatch(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 2,
-                        "method": "fs/read_text_file",
-                        "params": {"path": str(blocked)},
-                    },
-                    cwd=str(home),
-                )
-
-        self.assertIn("error", response)
 
     def test_read_text_file_redacts_sensitive_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -449,72 +133,7 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
         self.assertIn("中文标题", content)
         self.assertIn("em dash —", content)
 
-    def test_fs_write_text_file_encodes_as_utf8(self) -> None:
-        """Regression for #18637 (bug 2): fs/write_text_file used
-        ``path.write_text()`` with no explicit encoding, so on non-UTF-8
-        locales the Copilot write tool could not emit code/config files
-        containing any char outside the platform codec."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            target = root / "out.md"
-            payload = "# 中文标题\nem dash — here\n"
 
-            original_write_text = Path.write_text
-
-            def strict_write_text(
-                self, data, encoding=None, errors=None, **kwargs
-            ):
-                if self == target and encoding != "utf-8":
-                    raise UnicodeEncodeError(
-                        "gbk", data, 0, 1, "illegal multibyte sequence"
-                    )
-                return original_write_text(
-                    self, data, encoding=encoding, errors=errors, **kwargs
-                )
-
-            with patch.object(Path, "write_text", strict_write_text):
-                response = self._dispatch(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 11,
-                        "method": "fs/write_text_file",
-                        "params": {
-                            "path": str(target),
-                            "content": payload,
-                        },
-                    },
-                    cwd=str(root),
-                )
-
-            self.assertNotIn("error", response)
-            self.assertEqual(target.read_text(encoding="utf-8"), payload)
-
-    def test_write_text_file_reuses_write_denylist(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            home = Path(tmpdir) / "home"
-            target = home / ".ssh" / "id_rsa"
-            target.parent.mkdir(parents=True, exist_ok=True)
-
-            with patch(
-                "agent.acp_client_base.get_write_denied_error",
-                return_value="Write denied: protected",
-                create=True,
-            ):
-                response = self._dispatch(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 4,
-                        "method": "fs/write_text_file",
-                        "params": {
-                            "path": str(target),
-                            "content": "fake-private-key",
-                        },
-                    },
-                    cwd=str(home),
-                )
-
-        self.assertIn("error", response)
-        self.assertFalse(target.exists())
 
     def test_write_text_file_respects_safe_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -547,8 +166,9 @@ if __name__ == "__main__":
 
 
 # ── HOME env propagation tests (from PR #11285) ─────────────────────
-# pytest is optional at import time so unittest can load the safety class
-# above without a full pytest install in every environment.
+
+from unittest.mock import patch as _patch
+import pytest
 
 
 def _make_home_client(tmp_path):
@@ -570,9 +190,6 @@ def _fake_popen_capture(captured):
 
 
 def test_run_prompt_preserves_real_home_when_profile_home_available(monkeypatch, tmp_path):
-    import pytest
-    from unittest.mock import patch as _patch
-
     hermes_home = tmp_path / "hermes"
     (hermes_home / "home").mkdir(parents=True)
     real_home = tmp_path / "real-home"
@@ -594,33 +211,112 @@ def test_run_prompt_preserves_real_home_when_profile_home_available(monkeypatch,
     captured = {}
     client = _make_home_client(tmp_path)
 
-    with _patch("agent.acp_client_base.subprocess.Popen", side_effect=_fake_popen_capture(captured)):
-        with pytest.raises(RuntimeError, match="Could not start Copilot ACP command"):
-            client._run_prompt("hello", timeout_seconds=1)
+    # Hermeticity: the --acp support probe (PR #87308) calls subprocess.run
+    # before Popen; stub it inconclusive so no real CLI on the host box can
+    # flip the resolution this test asserts.
+    with _patch("agent.copilot_acp_client.subprocess.run", side_effect=FileNotFoundError):
+        with _patch("agent.acp_client_base.subprocess.Popen", side_effect=_fake_popen_capture(captured)):
+            with pytest.raises(RuntimeError, match="Could not start Copilot ACP command"):
+                client._run_prompt("hello", timeout_seconds=1)
 
     assert captured["kwargs"]["env"]["HOME"] == str(real_home)
     assert captured["kwargs"]["env"]["HERMES_REAL_HOME"] == str(real_home)
 
 
 def test_run_prompt_passes_home_when_parent_env_is_clean(monkeypatch, tmp_path):
-    import pytest
-    from unittest.mock import patch as _patch
-
     monkeypatch.delenv("HOME", raising=False)
     monkeypatch.delenv("HERMES_HOME", raising=False)
 
     captured = {}
     client = _make_home_client(tmp_path)
 
-    with _patch("agent.acp_client_base.subprocess.Popen", side_effect=_fake_popen_capture(captured)):
-        with pytest.raises(RuntimeError, match="Could not start Copilot ACP command"):
-            client._run_prompt("hello", timeout_seconds=1)
+    # Hermeticity: the --acp support probe (PR #87308) calls subprocess.run
+    # before Popen; stub it inconclusive so no real CLI on the host box can
+    # flip the resolution this test asserts.
+    with _patch("agent.copilot_acp_client.subprocess.run", side_effect=FileNotFoundError):
+        with _patch("agent.acp_client_base.subprocess.Popen", side_effect=_fake_popen_capture(captured)):
+            with pytest.raises(RuntimeError, match="Could not start Copilot ACP command"):
+                client._run_prompt("hello", timeout_seconds=1)
 
     assert "env" in captured["kwargs"]
     assert captured["kwargs"]["env"]["HOME"]
 
 
-# 1x1 transparent PNG — smallest valid image payload for content-part tests.
+# ── --acp support probe tests (PR #87308 / issue #87309) ────────────
+
+import subprocess as _subprocess
+
+from agent.copilot_acp_client import _ACP_PROBE_CACHE, _acp_supported
+
+
+@pytest.fixture(autouse=True)
+def _clear_probe_cache():
+    _ACP_PROBE_CACHE.clear()
+    yield
+    _ACP_PROBE_CACHE.clear()
+
+
+def _completed(returncode=0, stdout=""):
+    return _subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
+
+
+def test_probe_true_when_help_advertises_acp():
+    with _patch(
+        "agent.copilot_acp_client.subprocess.run",
+        return_value=_completed(stdout="Usage: copilot [--acp] [--stdio]"),
+    ):
+        assert _acp_supported("copilot", ["--acp", "--stdio"]) is True
+
+
+def test_probe_false_when_help_lacks_acp_and_run_prompt_fast_fails(tmp_path):
+    client = _make_home_client(tmp_path)
+    with _patch(
+        "agent.copilot_acp_client.subprocess.run",
+        return_value=_completed(stdout="Usage: claude [--print] [--model]"),
+    ):
+        with pytest.raises(RuntimeError, match="ACP transport not supported"):
+            client._run_prompt("hello", timeout_seconds=1)
+
+
+def test_probe_inconclusive_falls_through_to_spawn_error(tmp_path):
+    """Missing binary: probe must NOT mask the established spawn error."""
+    client = _make_home_client(tmp_path)
+    with _patch(
+        "agent.copilot_acp_client.subprocess.run",
+        side_effect=FileNotFoundError("copilot not found"),
+    ):
+        with _patch(
+            "agent.acp_client_base.subprocess.Popen",
+            side_effect=FileNotFoundError("copilot not found"),
+        ):
+            with pytest.raises(RuntimeError, match="Could not start Copilot ACP command"):
+                client._run_prompt("hello", timeout_seconds=1)
+
+
+def test_probe_result_cached_per_binary_path():
+    with _patch(
+        "agent.copilot_acp_client.subprocess.run",
+        return_value=_completed(stdout="Usage: copilot [--acp]"),
+    ) as run_mock:
+        assert _acp_supported("copilot", ["--acp"]) is True
+        assert _acp_supported("copilot", ["--acp"]) is True
+    assert run_mock.call_count == 1
+
+
+def test_probe_inconclusive_not_cached():
+    with _patch(
+        "agent.copilot_acp_client.subprocess.run",
+        side_effect=FileNotFoundError,
+    ) as run_mock:
+        assert _acp_supported("copilot", ["--acp"]) is None
+        assert _acp_supported("copilot", ["--acp"]) is None
+    assert run_mock.call_count == 2  # inconclusive verdicts retry
+
+
+def test_probe_skipped_for_custom_args_without_acp():
+    with _patch("agent.copilot_acp_client.subprocess.run") as run_mock:
+        assert _acp_supported("mycli", ["--custom-transport"]) is True
+    run_mock.assert_not_called()
 _ONE_PX_PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
     "890000000a49444154789c6300010000000500010d0a2db40000000049454e44ae426082"

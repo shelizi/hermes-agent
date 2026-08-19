@@ -1554,6 +1554,13 @@ class BaseACPClient:
         """Argv for the ACP child process. Subclasses may extend."""
         return [self._acp_command] + list(self._acp_args)
 
+    def _pre_spawn_check(self) -> None:
+        """Hook before spawning the ACP child process.
+
+        Subclasses can fast-fail when the resolved command/args are known
+        to be unsupported, turning a silent hang into a clear error.
+        """
+
     def _prepare_for_model(self, model: str | None) -> None:
         """Hook before initialize/prompt so backends can rebind model state.
 
@@ -1591,6 +1598,11 @@ class BaseACPClient:
 
     def _spawn_process(self) -> subprocess.Popen[str]:
         label = self._acp_display_name
+        # Fast-fail when the CLI doesn't support the ACP args we would pass.
+        # Without this guard, a CLI that doesn't recognize the transport exits
+        # immediately and the parent waits the full ``child_timeout_seconds``
+        # for stdout that never arrives.
+        self._pre_spawn_check()
         try:
             # Force UTF-8 on the child pipes. On Windows the default console
             # encoding is often cp950/cp1252; Devin/Copilot ACP logs use UTF-8
