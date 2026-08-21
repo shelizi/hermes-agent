@@ -54,6 +54,8 @@ def _acp_supported(command: str, args: list[str]) -> bool | None:
         path, which surfaces the existing "Could not start Copilot ACP
         command" error with full context.
     """
+    # Only probes when ``--acp`` is actually among ``args``: a custom
+    # HERMES_COPILOT_ACP_ARGS transport is the operator's business.
     if "--acp" not in args:
         return True
     cached = _ACP_PROBE_CACHE.get(command)
