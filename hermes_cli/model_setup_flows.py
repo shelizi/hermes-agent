@@ -19,6 +19,7 @@ call time, when main.py is fully loaded) so this module never imports
 """
 
 from __future__ import annotations
+from hermes_cli.cli_output import line_input
 
 import argparse
 import os
@@ -919,7 +920,7 @@ def _model_flow_custom(config):
     print()
 
     try:
-        base_url = input(
+        base_url = line_input(
             f"API base URL [{current_url or 'e.g. https://api.example.com/v1'}]: "
         ).strip()
         api_key = masked_secret_prompt(
@@ -1020,7 +1021,7 @@ def _model_flow_custom(config):
             if confirm in {"", "y", "yes"}:
                 model_name = detected_models[0]
             else:
-                model_name = input("Model name (e.g. gpt-4, llama-3-70b): ").strip()
+                model_name = line_input("Model name (e.g. gpt-4, llama-3-70b): ").strip()
         elif len(detected_models) > 1:
             print("  Available models:")
             for i, m in enumerate(detected_models, 1):
@@ -1033,15 +1034,15 @@ def _model_flow_custom(config):
             elif pick:
                 model_name = pick
         else:
-            model_name = input("Model name (e.g. gpt-4, llama-3-70b): ").strip()
+            model_name = line_input("Model name (e.g. gpt-4, llama-3-70b): ").strip()
 
-        context_length_str = input(
+        context_length_str = line_input(
             "Context length in tokens [leave blank for auto-detect]: "
         ).strip()
 
         # Prompt for a display name — shown in the provider menu on future runs
         default_name = _auto_provider_name(effective_url)
-        display_name = input(f"Display name [{default_name}]: ").strip() or default_name
+        display_name = line_input(f"Display name [{default_name}]: ").strip() or default_name
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.")
         return
@@ -1224,7 +1225,7 @@ def _model_flow_azure_foundry(config, current_model=""):
             or "e.g. https://<resource>.openai.azure.com/openai/v1 "
               "or https://<resource>.services.ai.azure.com/anthropic"
         )
-        base_url = input(
+        base_url = line_input(
             f"API endpoint URL [{_placeholder}]: "
         ).strip()
     except (KeyboardInterrupt, EOFError):
@@ -1421,7 +1422,7 @@ def _model_flow_azure_foundry(config, current_model=""):
             effective_model = pick
     else:
         try:
-            model_name = input(
+            model_name = line_input(
                 f"Model / deployment name [{current_model or 'e.g. gpt-5.4, claude-sonnet-4-6'}]: "
             ).strip()
         except (KeyboardInterrupt, EOFError):
@@ -1715,14 +1716,14 @@ def _model_flow_named_custom(config, provider_info):
     elif saved_model and not native_catalog_empty:
         print("Could not fetch models from endpoint.")
         try:
-            model_name = input(f"Model name [{saved_model}]: ").strip() or saved_model
+            model_name = line_input(f"Model name [{saved_model}]: ").strip() or saved_model
         except (KeyboardInterrupt, EOFError):
             print("\nCancelled.")
             return
     else:
         print("Could not fetch models from endpoint. Enter model name manually.")
         try:
-            model_name = input("Model name: ").strip()
+            model_name = line_input("Model name: ").strip()
         except (KeyboardInterrupt, EOFError):
             print("\nCancelled.")
             return
@@ -1939,7 +1940,7 @@ def _model_flow_copilot(config, current_model=""):
         )
     else:
         try:
-            selected = input("Model name: ").strip()
+            selected = line_input("Model name: ").strip()
         except (KeyboardInterrupt, EOFError):
             selected = None
 
@@ -2070,6 +2071,30 @@ def _model_flow_external_process(config, provider_id, current_model=""):
         confirm_api_key="",
     )
 
+    if catalog:
+        model_list = [item.get("id", "") for item in catalog if item.get("id")]
+        print(f"  Found {len(model_list)} model(s) from GitHub Copilot")
+    else:
+        model_list = _PROVIDER_MODELS.get("copilot", [])
+        if model_list:
+            print(
+                "  ⚠ Could not auto-detect models from GitHub Copilot — showing defaults."
+            )
+            print('    Use "Enter custom model name" if you do not see your model.')
+
+    if model_list:
+        selected = _prompt_model_selection(
+            model_list,
+            current_model=normalized_current_model,
+            confirm_provider=provider_id,
+            confirm_base_url=effective_base,
+            confirm_api_key=catalog_api_key,
+        )
+    else:
+        try:
+            selected = line_input("Model name: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            selected = None
     if not selected:
         print("No change.")
         return
@@ -2160,7 +2185,7 @@ def _model_flow_kimi(config, current_model=""):
         )
     else:
         try:
-            selected = input("Enter model name: ").strip()
+            selected = line_input("Enter model name: ").strip()
         except (KeyboardInterrupt, EOFError):
             selected = None
 
@@ -2273,7 +2298,7 @@ def _model_flow_stepfun(config, current_model=""):
         )
     else:
         try:
-            selected = input("Model name: ").strip()
+            selected = line_input("Model name: ").strip()
         except (KeyboardInterrupt, EOFError):
             selected = None
 
@@ -2366,7 +2391,7 @@ def _model_flow_bedrock_api_key(config, region, current_model=""):
         )
     else:
         try:
-            selected = input("  Model ID: ").strip()
+            selected = line_input("  Model ID: ").strip()
         except (KeyboardInterrupt, EOFError):
             selected = None
 
@@ -2458,7 +2483,7 @@ def _model_flow_bedrock(config, current_model=""):
     # 2. Region selection
     current_region = resolve_bedrock_region()
     try:
-        region_input = input(f"  AWS Region [{current_region}]: ").strip()
+        region_input = line_input(f"  AWS Region [{current_region}]: ").strip()
     except (KeyboardInterrupt, EOFError):
         print()
         return
@@ -2589,7 +2614,7 @@ def _model_flow_bedrock(config, current_model=""):
         )
     else:
         try:
-            selected = input("  Model ID: ").strip()
+            selected = line_input("  Model ID: ").strip()
         except (KeyboardInterrupt, EOFError):
             selected = None
 
@@ -2659,7 +2684,7 @@ def _model_flow_vertex(config, current_model=""):
     # 2. Project ID (optional — falls back to the project embedded in creds).
     current_project = str(vertex_cfg.get("project_id") or "").strip()
     try:
-        project_input = input(
+        project_input = line_input(
             f"  GCP project ID [{current_project or 'from credentials'}]: "
         ).strip()
     except (KeyboardInterrupt, EOFError):
@@ -2670,7 +2695,7 @@ def _model_flow_vertex(config, current_model=""):
     # 3. Region (default global — required for the Gemini 3.x previews).
     current_region = str(vertex_cfg.get("region") or "global").strip() or "global"
     try:
-        region_input = input(f"  Vertex region [{current_region}]: ").strip()
+        region_input = line_input(f"  Vertex region [{current_region}]: ").strip()
     except (KeyboardInterrupt, EOFError):
         print()
         return
@@ -2767,7 +2792,7 @@ def _select_zai_endpoint(current_base: str) -> str:
     if selected == len(options):
         # Custom proxy URL
         try:
-            override = input(f"Custom base URL [{current_base}]: ").strip()
+            override = line_input(f"Custom base URL [{current_base}]: ").strip()
         except (KeyboardInterrupt, EOFError):
             print()
             return current_base
@@ -2807,17 +2832,23 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
     key_env = pconfig.api_key_env_vars[0] if pconfig.api_key_env_vars else ""
     base_url_env = pconfig.base_url_env_var or ""
 
-    # Check / prompt for API key
-    existing_key, existing_source = _existing_api_key_for_model_flow(provider_id, pconfig)
+    # OpenCode Free is keyless — the tier is served anonymously and any
+    # unrecognized bearer 401s, so there is no key to prompt for.
+    if provider_id == "opencode-free":
+        print("  OpenCode Free is keyless — no API key or account needed.")
+        existing_key = ""
+    else:
+        # Check / prompt for API key
+        existing_key, existing_source = _existing_api_key_for_model_flow(provider_id, pconfig)
 
-    existing_key, abort = _prompt_api_key(
-        pconfig,
-        existing_key,
-        provider_id=provider_id,
-        existing_source=existing_source,
-    )
-    if abort:
-        return
+        existing_key, abort = _prompt_api_key(
+            pconfig,
+            existing_key,
+            provider_id=provider_id,
+            existing_source=existing_source,
+        )
+        if abort:
+            return
 
     # Gemini free-tier gate: free-tier daily quotas (<= 250 RPD for Flash)
     # are exhausted in a handful of agent turns, so refuse to wire up the
@@ -2905,7 +2936,7 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
         effective_base = chosen_base
     else:
         try:
-            override = input(f"Base URL [{effective_base}]: ").strip()
+            override = line_input(f"Base URL [{effective_base}]: ").strip()
         except (KeyboardInterrupt, EOFError):
             print()
             override = ""
@@ -2986,6 +3017,16 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
                     print(
                         f'  Showing {len(model_list)} curated models — use "Enter custom model name" for others.'
                     )
+    elif provider_id == "opencode-free":
+        # Keyless free tier: the curated list is synced against anonymous
+        # live probes (models.dev's cost.input==0 filter lags reality —
+        # e.g. deepseek-v4-flash-free stayed "free" there after its promo
+        # ended and the relay started 401ing it keyless).
+        model_list = _PROVIDER_MODELS.get(provider_id, [])
+        if model_list:
+            print(
+                f'  Showing {len(model_list)} keyless free models — use "Enter custom model name" for others.'
+            )
     else:
         curated = _PROVIDER_MODELS.get(provider_id, [])
 
@@ -3034,7 +3075,7 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
                     )
             # else: no defaults either, will fall through to raw input
 
-    if provider_id in {"opencode-zen", "opencode-go"}:
+    if provider_id in {"opencode-zen", "opencode-go", "opencode-free"}:
         model_list = [
             normalize_opencode_model_id(provider_id, mid) for mid in model_list
         ]
@@ -3064,12 +3105,12 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
         )
     else:
         try:
-            selected = input("Model name: ").strip()
+            selected = line_input("Model name: ").strip()
         except (KeyboardInterrupt, EOFError):
             selected = None
 
     if selected:
-        if provider_id in {"opencode-zen", "opencode-go"}:
+        if provider_id in {"opencode-zen", "opencode-go", "opencode-free"}:
             selected = normalize_opencode_model_id(provider_id, selected)
 
         _save_model_choice(selected)
@@ -3083,7 +3124,7 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
         model["provider"] = provider_id
         model["base_url"] = effective_base
         clear_model_endpoint_credentials(model, clear_api_mode=False)
-        if provider_id in {"opencode-zen", "opencode-go"}:
+        if provider_id in {"opencode-zen", "opencode-go", "opencode-free"}:
             model["api_mode"] = opencode_model_api_mode(provider_id, selected)
         else:
             model.pop("api_mode", None)
@@ -3219,7 +3260,7 @@ def _model_flow_anthropic(config, current_model=""):
         )
     else:
         try:
-            selected = input("Model name (e.g., claude-sonnet-4-20250514): ").strip()
+            selected = line_input("Model name (e.g., claude-sonnet-4-20250514): ").strip()
         except (KeyboardInterrupt, EOFError):
             selected = None
 
