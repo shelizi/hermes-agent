@@ -11,7 +11,7 @@ import re
 import shlex
 import subprocess
 
-from agent.acp_client_base import BaseACPClient
+from agent.acp_client_base import BaseACPClient, _format_messages_as_prompt
 
 
 _DEPRECATION_REQUIRED = ("gh-copilot",)
@@ -102,7 +102,8 @@ class CopilotACPClient(BaseACPClient):
             return ["--acp", "--stdio"]
         return shlex.split(raw)
 
-    def _is_deprecation_message(self, stderr_text: str) -> bool:
+    @staticmethod
+    def _is_deprecation_message(stderr_text: str) -> bool:
         """True iff stderr looks like the deprecated gh-copilot extension's banner."""
         return _is_gh_copilot_deprecation_message(stderr_text)
 
