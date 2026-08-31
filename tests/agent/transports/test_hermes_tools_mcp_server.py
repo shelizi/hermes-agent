@@ -105,6 +105,8 @@ class TestModuleSurface:
             "web_search",
             "web_extract",
             "browser_navigate",
+            "browser_exec",
+            "execute_code",
             "vision_analyze",
             "image_generate",
             "skills_list",
@@ -169,6 +171,24 @@ class TestAcpBridge:
             "skills_list",
             "todo",
         ]
+
+    def test_host_code_tools_require_explicit_parent_allowlist(self, monkeypatch, tmp_path):
+        from agent.transports.hermes_tools_mcp_server import build_acp_server_config
+
+        monkeypatch.setattr("hermes_constants.get_hermes_home", lambda: tmp_path)
+
+        default_server = build_acp_server_config()[0]
+        default_env = {item["name"]: item["value"] for item in default_server["env"]}
+        default_tools = set(json.loads(default_env["HERMES_ACP_MCP_TOOLS"]))
+        assert "browser_exec" not in default_tools
+        assert "execute_code" not in default_tools
+
+        explicit_server = build_acp_server_config(["browser_exec", "execute_code"])[0]
+        explicit_env = {item["name"]: item["value"] for item in explicit_server["env"]}
+        assert set(json.loads(explicit_env["HERMES_ACP_MCP_TOOLS"])) == {
+            "browser_exec",
+            "execute_code",
+        }
 
     def test_stateless_todo_keeps_state_inside_the_mcp_process(self, monkeypatch):
         from agent.transports import hermes_tools_mcp_server as bridge

@@ -1,21 +1,21 @@
-"""Hermes-tools-as-MCP server for the codex_app_server runtime.
+"""Hermes-tools-as-MCP server for external ACP runtimes.
 
-When the user runs `openai/*` turns through the codex app-server, codex
-owns the loop and builds its own tool list. By default, that means
-Hermes' richer tool surface — web search, browser automation, vision analysis,
-persistent memory, skills, cross-session search, image generation, TTS — is
-unreachable.
+Some ACP providers own their agent loop and build their own native tool list.
+Without a bridge, Hermes' richer tool surface — web search, browser automation,
+vision analysis, persistent memory, skills, cross-session search, image
+generation, and TTS — is unreachable from those turns.
 
-This module exposes a curated subset of those Hermes tools to the
-spawned codex subprocess via stdio MCP. Codex registers it as a normal
-MCP server (per `~/.codex/config.toml [mcp_servers.hermes-tools]`) and
-the user gets full Hermes capability inside a Codex turn.
+This module exposes a curated subset of Hermes tools to compatible ACP
+subprocesses over stdio MCP. It is shared by native-MCP providers such as
+Devin and Grok, and by the Codex app-server runtime when configured.
 
 Scope (what we expose):
   - web_search, web_extract              — Firecrawl, no codex equivalent
   - browser_navigate / _click / _type /  — Camofox/Browserbase automation
     _snapshot / _scroll / _back / _press /
     _get_images / _console / _vision
+  - browser_exec                         — Browser Use driver (explicit grant only)
+  - execute_code                         — Hermes code runner (explicit grant only)
   - vision_analyze                       — image inspection by vision model
   - image_generate                       — image generation
   - skill_view, skills_list, skill_manage — Hermes' skill library
@@ -26,18 +26,17 @@ Scope (what we expose):
     unblock/link)                          write ~/.hermes/kanban.db)
 
 What we DO NOT expose:
-  - terminal / shell                     — codex's own shell tool
-  - read_file / write_file / patch       — codex's apply_patch + shell
-  - search_files / process               — codex's shell
-  - clarify                              — codex's own UX
+  - terminal / shell                     — provider-native shell/terminal
+  - read_file / write_file / patch       — provider-native file/shell tools
+  - search_files / process               — provider-native search/process tools
+  - clarify                              — provider-native UX
   - delegate_task / clarify              — require the running AIAgent or
                                            interactive UI context and cannot
                                            be represented safely as a
                                            stateless MCP callback.
 
 Run with: python -m agent.transports.hermes_tools_mcp_server
-Spawned by: CodexAppServerSession.ensure_started() when the runtime is
-            active and config opts in.
+Spawned/configured by ACP clients that support native MCP servers.
 """
 
 from __future__ import annotations
@@ -51,6 +50,21 @@ from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_mcp_server_class() -> Any:
+    """Return the MCP server class across supported SDK layouts."""
+    try:
+        from mcp.server import MCPServer
+
+        return MCPServer
+    except ImportError:
+        try:
+            from mcp.server.fastmcp import FastMCP
+
+            return FastMCP
+        except ImportError:
+            return None
 
 # JSON Schema type -> Python type mapping for signature generation
 _JSON_TO_PY = {
@@ -101,8 +115,8 @@ def _signature_from_schema(schema: dict | None) -> tuple[inspect.Signature, dict
 #
 # What we deliberately DO NOT expose:
 #   - terminal / shell / read_file / write_file / patch / search_files /
-#     process — codex's built-ins cover these and approval routes through
-#     codex's own UI.
+#     process — native ACP providers already own those surfaces and their
+#     approval flow should remain authoritative.
 #   - delegate_task / clarify — these require a live AIAgent or interactive
 #     UI callback and cannot be made correct by a stateless MCP process.
 EXPOSED_TOOLS: tuple[str, ...] = (
@@ -118,6 +132,8 @@ EXPOSED_TOOLS: tuple[str, ...] = (
     "browser_get_images",
     "browser_console",
     "browser_vision",
+    "browser_exec",
+    "execute_code",
     "vision_analyze",
     "image_generate",
     "skill_view",
@@ -142,7 +158,7 @@ EXPOSED_TOOLS: tuple[str, ...] = (
     "kanban_list",
     # NOTE: kanban_create / kanban_unblock / kanban_link are orchestrator-
     # only — the kanban tool gates them on HERMES_KANBAN_TASK being unset.
-    # They're exposed here for orchestrator agents running on the codex
+    # They're exposed here for orchestrator agents running through an ACP
     # runtime that need to dispatch new tasks.
     "kanban_create",
     "kanban_unblock",
@@ -151,6 +167,10 @@ EXPOSED_TOOLS: tuple[str, ...] = (
 
 ACP_SERVER_NAME = "hermes-tools"
 _ACP_ALLOWED_TOOLS_ENV = "HERMES_ACP_MCP_TOOLS"
+# These tools can execute model-authored code on the host. They are available
+# through the bridge only when the parent Hermes session explicitly granted
+# them; a standalone/default MCP bridge must never widen execution privileges.
+_EXPLICIT_GRANT_ONLY_TOOLS = frozenset({"browser_exec", "execute_code"})
 _todo_store: Any = None
 
 
@@ -178,12 +198,14 @@ def build_acp_server_config(
     accidentally exposing a broader process-global registry than the parent
     agent advertised.
     """
-    try:
-        from mcp.server.fastmcp import FastMCP  # noqa: F401
-    except ImportError:
+    if _resolve_mcp_server_class() is None:
         return []
 
-    requested = set(allowed_tools) if allowed_tools is not None else set(EXPOSED_TOOLS)
+    requested = (
+        set(allowed_tools)
+        if allowed_tools is not None
+        else set(EXPOSED_TOOLS).difference(_EXPLICIT_GRANT_ONLY_TOOLS)
+    )
     selected = sorted(requested.intersection(EXPOSED_TOOLS))
     if not selected:
         return []
@@ -212,7 +234,7 @@ def build_acp_server_config(
 def _allowed_tools_from_env() -> set[str]:
     raw = os.environ.get(_ACP_ALLOWED_TOOLS_ENV, "").strip()
     if not raw:
-        return set(EXPOSED_TOOLS)
+        return set(EXPOSED_TOOLS).difference(_EXPLICIT_GRANT_ONLY_TOOLS)
     try:
         value = json.loads(raw)
     except json.JSONDecodeError:
@@ -249,14 +271,9 @@ def _build_server() -> Any:
     """Create the MCP server with Hermes tools attached. Lazy imports
     so the module can be imported without the mcp package installed
     (we degrade to a clear error only when actually run)."""
-    try:
-        # mcp 2.0 removed `mcp.server.fastmcp`; `mcp.server.MCPServer` is the
-        # same decorator/add_tool surface under the new name.
-        from mcp.server import MCPServer
-    except ImportError as exc:  # pragma: no cover - install hint
-        raise ImportError(
-            f"hermes-tools MCP server requires the 'mcp' package: {exc}"
-        ) from exc
+    _MCPServer = _resolve_mcp_server_class()
+    if _MCPServer is None:  # pragma: no cover - install hint
+        raise ImportError("hermes-tools MCP server requires the 'mcp' package")
 
     # Discover Hermes tools so dispatch works.
     from model_tools import (
@@ -264,11 +281,11 @@ def _build_server() -> Any:
         handle_function_call,
     )
 
-    mcp = MCPServer(
+    mcp = _MCPServer(
         "hermes-tools",
         instructions=(
-            "Hermes Agent's tool surface, exposed for use inside a Codex "
-            "session. Use these for capabilities Codex's built-in toolset "
+            "Hermes Agent's tool surface, exposed for use inside an external "
+            "ACP session. Use these for capabilities the provider's built-in toolset "
             "doesn't cover: web search/extract, browser automation, "
             "subagent delegation, vision, image generation, persistent "
             "memory, skills, and cross-session search."
