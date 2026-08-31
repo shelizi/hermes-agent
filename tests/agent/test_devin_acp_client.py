@@ -338,6 +338,27 @@ class TestDevinAcpClientDefaults(unittest.TestCase):
         client._session_model_value = "swe-1-7"
         assert client._prompt_tools(tools) is tools
 
+    def test_swe_textual_tool_protocol_does_not_attach_competing_hermes_mcp_tools(self):
+        client = DevinACPClient(acp_cwd="/tmp", command="devin", args=["acp"])
+        client._desired_process_model = "swe-1.7"
+        tools = [
+            {"type": "function", "function": {"name": "skill_view"}},
+            {"type": "function", "function": {"name": "terminal"}},
+            {"type": "function", "function": {"name": "execute_code"}},
+            {"type": "function", "function": {"name": "browser_exec"}},
+        ]
+
+        with patch(
+            "agent.transports.hermes_memory_mcp_server.build_acp_server_config"
+        ) as memory_build, patch(
+            "agent.transports.hermes_tools_mcp_server.build_acp_server_config"
+        ) as tools_build:
+            assert client._session_mcp_servers(tools) == []
+
+        memory_build.assert_not_called()
+        tools_build.assert_not_called()
+        assert client._prompt_tools(tools) is tools
+
     def test_native_mcp_bridge_exposes_all_tools_without_prompt_schema(self):
         client = DevinACPClient(acp_cwd="/tmp", command="devin", args=["acp"])
         with patch(
@@ -599,6 +620,11 @@ class TestAcpToolLoopSession(unittest.TestCase):
 
         assert r2.choices[0].message.content == "ok-1"
         assert client._session_model_value == "swe-1-7"
+
+        session_new = next(
+            w for w in procs[0].writes if w.get("method") == "session/new"
+        )
+        assert session_new["params"]["mcpServers"] == []
 
         # Second prompt must contain the tool schema (continuation prompt too).
         prompt_bodies = [

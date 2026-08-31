@@ -239,11 +239,25 @@ class DevinACPClient(BaseACPClient):
             return [self._acp_command, "--model", desired, *list(self._acp_args)]
         return [self._acp_command, *list(self._acp_args)]
 
+    def _uses_textual_tool_protocol(self) -> bool:
+        """Whether the active Devin model should use Hermes textual tool calls.
+
+        SWE-family models emit ``<tool_call>`` blocks that Hermes parses and
+        dispatches itself. Publishing the same Hermes tools through native MCP
+        at the same time creates two competing tool interfaces and can make
+        Devin route calls to a partial/native surface instead, producing
+        ``Unknown tool`` or mismatched skill-invoke schemas.
+        """
+        model = (self._desired_process_model or self._session_model_value or "").lower()
+        return "swe" in model
+
     def _session_mcp_servers(
         self,
         tools: list[dict[str, Any]] | None,
     ) -> list[dict[str, Any]]:
         """Attach Hermes MCP bridges for tools granted to this ACP session."""
+        if self._uses_textual_tool_protocol():
+            return []
         tool_names = {
             item.get("function", {}).get("name")
             for item in (tools or [])
@@ -286,8 +300,7 @@ class DevinACPClient(BaseACPClient):
         # Prefer the model requested for this turn; if the user selected the
         # ``devin-acp`` placeholder, fall back to the ACP session model value
         # (e.g. swe-1-7) reported by the active session.
-        model = (self._desired_process_model or self._session_model_value or "").lower()
-        if "swe" in model:
+        if self._uses_textual_tool_protocol():
             return tools
         return None
 
