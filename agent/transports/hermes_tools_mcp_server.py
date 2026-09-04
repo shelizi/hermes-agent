@@ -78,37 +78,56 @@ _JSON_TO_PY = {
 
 
 def _signature_from_schema(schema: dict | None) -> tuple[inspect.Signature, dict[str, type]]:
-    """Build a Python function signature and annotations from a JSON schema.
+    """Synthesize a inspect.Signature and annotations dict from a JSON Schema.
 
-    Args:
-        schema: JSON Schema dict with "properties" and "required" keys.
-
-    Returns:
-        (signature, annotations_dict) where signature has KEYWORD_ONLY params
-        and annotations maps param names to Python types.
+    The mcp Python SDK generates MCP tool inputSchema by reflecting on the
+    Python callable's signature and type annotations. Since Hermes tools
+    are registered with JSON Schema parameter definitions (not typed Python
+    callables), this helper creates a signature the SDK can reflect on.
     """
-    props = (schema or {}).get("properties") or {}
-    required = set((schema or {}).get("required") or [])
-    params, annots = [], {}
+    if not schema or not isinstance(schema, dict):
+        return inspect.Signature(), {}
 
-    for pname, pspec in props.items():
-        if pname.startswith("_"):
+    props = schema.get("properties") or {}
+    required = set(schema.get("required") or [])
+
+    parameters = []
+    annotations = {}
+
+    for prop_name, prop_spec in props.items():
+        if prop_name.startswith("_"):
             continue
-        py = _JSON_TO_PY.get((pspec or {}).get("type"), Any)
-        ann, default = (
-            (py, inspect.Parameter.empty)
-            if pname in required
-            else (Optional[py], None)
-        )
-        annots[pname] = ann
-        params.append(
-            inspect.Parameter(
-                pname, inspect.Parameter.KEYWORD_ONLY, annotation=ann, default=default
+        json_type = (prop_spec or {}).get("type", "string")
+        py_type = _JSON_TO_PY.get(json_type, Any)
+
+        if prop_name in required:
+            param = inspect.Parameter(
+                prop_name,
+                inspect.Parameter.KEYWORD_ONLY,
+                annotation=py_type,
             )
-        )
+            annotations[prop_name] = py_type
+        else:
+            param = inspect.Parameter(
+                prop_name,
+                inspect.Parameter.KEYWORD_ONLY,
+                default=None,
+                annotation=Optional[py_type],
+            )
+            annotations[prop_name] = Optional[py_type]
 
-    return inspect.Signature(params, return_annotation=str), annots
+        parameters.append(param)
 
+    sig = inspect.Signature(parameters, return_annotation=str)
+    return sig, annotations
+
+
+ACP_SERVER_NAME = "hermes-tools"
+_ACP_ALLOWED_TOOLS_ENV = "HERMES_ACP_MCP_ALLOWED_TOOLS"
+_todo_store = None
+
+# Tools that require explicit allowlisting and must not be exposed by default.
+_EXPLICIT_GRANT_ONLY_TOOLS = frozenset({"browser_exec", "execute_code"})
 
 # Tools we expose. Each name MUST match a registered Hermes tool that
 # `model_tools.handle_function_call()` can dispatch.
@@ -165,20 +184,13 @@ EXPOSED_TOOLS: tuple[str, ...] = (
     "kanban_link",
 )
 
-ACP_SERVER_NAME = "hermes-tools"
-_ACP_ALLOWED_TOOLS_ENV = "HERMES_ACP_MCP_TOOLS"
-# These tools can execute model-authored code on the host. They are available
-# through the bridge only when the parent Hermes session explicitly granted
-# them; a standalone/default MCP bridge must never widen execution privileges.
-_EXPLICIT_GRANT_ONLY_TOOLS = frozenset({"browser_exec", "execute_code"})
-_todo_store: Any = None
-
 
 def _apply_tool_schema(server: Any, name: str, parameters: dict[str, Any]) -> None:
-    """Replace FastMCP's inferred schema with Hermes' authoritative schema.
+    """Overwrite the reflected tool schema with Hermes' authoritative JSON schema.
 
-    The synthetic signature is sufficient for older MCP SDKs.  Newer SDKs
-    expose the registered Tool object, so also replace its published schema
+    The mcp SDK's signature reflection loses enum values, field descriptions,
+    default values, and nested object structures. Overwrite the generated
+    Tool.parameters with the original JSON schema that Hermes sends the model,
     to retain descriptions, enums, defaults, and nested structures.
     """
     manager = getattr(server, "_tool_manager", None)
@@ -327,10 +339,11 @@ def _build_server() -> Any:
 
             def _dispatch(**kwargs: Any) -> str:
                 try:
-                    stateless_result = _dispatch_stateless_tool(tool_name, kwargs)
+                    args = {k: v for k, v in kwargs.items() if v is not None}
+                    stateless_result = _dispatch_stateless_tool(tool_name, args)
                     if stateless_result is not None:
                         return stateless_result
-                    return handle_function_call(tool_name, kwargs or {})
+                    return handle_function_call(tool_name, args)
                 except Exception as exc:
                     logger.exception("tool %s raised", tool_name)
                     return json.dumps({"error": str(exc), "tool": tool_name})

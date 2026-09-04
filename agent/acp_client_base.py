@@ -1143,6 +1143,11 @@ class BaseACPClient:
     # ACP can stream, but the complete-response path is cheaper for quiet/
     # subagent turns that have no display/TTS consumer.
     prefers_sync_without_consumers = True
+    # ACP shims manage their own transport and async safety; skip outer HTTP/async wrapping.
+    HERMES_SKIP_TRANSPORT_WRAP = True
+    HERMES_SKIP_ASYNC_WRAP = True
+
+
 
     def __init__(
         self,
