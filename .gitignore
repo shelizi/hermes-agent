@@ -24,6 +24,7 @@ act/
 .notebooklm-home/
 .notebooklm-cli-venv/
 .notebooklm-playwright/
+.playwright-mcp/
 .pip-cache/
 .uv-cache/
 compose.hermes.local.yml
@@ -40,6 +41,7 @@ data/
 test_durations.json
 .pytest-cache/
 tmp/
+.tmp*
 temp_vision_images/
 hermes-*/*
 examples/
@@ -220,3 +222,6 @@ native/fts5_cjk/*.so
 
 # Disposable profile created by scripts/probe_active_session_exclusivity.py
 .probe-home/
+
+# Agent session history records and locks
+docs/history-session/
