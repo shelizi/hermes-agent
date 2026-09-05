@@ -69,6 +69,40 @@ class TestTurnRunner:
         runner = _make_runner(ctx)  # stub adapter resolver returns None
         assert asyncio.run(runner.send_progress_messages()) is None
 
+    def test_acp_progress_collapses_native_update_stream_in_normal_modes(self):
+        progress_queue = queue_mod.Queue()
+        ctx = TurnContext(
+            progress_queue=progress_queue,
+            progress_mode="all",
+            tool_progress_enabled=True,
+            _run_still_current=lambda: True,
+        )
+        runner = _make_runner(ctx)
+
+        runner.progress_callback("tool.started", "acp_other", "Ran command: first", {})
+        runner.progress_callback("tool.started", "acp_execute", "Ran command: second", {})
+        runner.progress_callback("tool.started", "acp_other", "Read shell", {})
+
+        assert list(progress_queue.queue) == ["⚙️ ACP agent working..."]
+
+    def test_acp_progress_verbose_preserves_native_update_details(self):
+        progress_queue = queue_mod.Queue()
+        ctx = TurnContext(
+            progress_queue=progress_queue,
+            progress_mode="verbose",
+            tool_progress_enabled=True,
+            _run_still_current=lambda: True,
+        )
+        runner = _make_runner(ctx)
+
+        runner.progress_callback("tool.started", "acp_other", "Ran command: first", {})
+        runner.progress_callback("tool.started", "acp_execute", "Ran command: second", {})
+
+        assert list(progress_queue.queue) == [
+            '⚙️ acp_other: "Ran command: first"',
+            '⚙️ acp_execute: "Ran command: second"',
+        ]
+
     def test_normal_response_preserves_compression_exhausted(self):
         """A non-empty exhaustion response must still reach auto-reset consumers."""
 

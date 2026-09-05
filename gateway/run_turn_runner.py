@@ -131,10 +131,14 @@ class TurnRunner:
             or self._agent_interrupted()
         ):
             return
-        # "new" mode: only report when tool changes
-        if ctx.progress_mode == "new" and tool_name == ctx.last_tool[0]:
+        # Native ACP providers can emit dozens of incremental updates for one external tool
+        # session (acp_other/acp_execute/etc.). In normal chat modes treat that stream as
+        # one logical tool; /verbose still exposes every raw ACP update for diagnostics.
+        is_compact_acp = bool(tool_name and tool_name.startswith("acp_") and ctx.progress_mode != "verbose")
+        progress_tool = "acp" if is_compact_acp else tool_name
+        if progress_tool == ctx.last_tool[0] and (ctx.progress_mode == "new" or is_compact_acp):
             return
-        ctx.last_tool[0] = tool_name
+        ctx.last_tool[0] = progress_tool
         msg = self._progress_build_message(tool_name, preview, args)
         if msg is not None:
             self._progress_emit(msg)
@@ -231,6 +235,8 @@ class TurnRunner:
         verbose = ctx.progress_mode == "verbose"
         code = code_full if verbose else code_short
         ctx.last_was_terminal_block[0] = code is not None
+        if tool_name and tool_name.startswith("acp_") and not verbose:
+            return f"{emoji} ACP agent working..."
         if verbose:
             if code is None and args:
                 from agent.display import get_tool_preview_max_len
